@@ -2711,10 +2711,12 @@ void MainWindow::positionTopMenuRestoreBtn()
 {
     if (!topMenuRestoreBtn) return;
 
-    // Top-right corner of the window, just under the title bar - clear of
-    // the min/max/close buttons which live in CustomTitleBar to its left.
+    // Right-aligned, just under the title bar - NOT inside it, or it
+    // overlaps the min/max/close buttons that live there (CustomTitleBar,
+    // 34px tall). Sits in the strip the collapsed menu row used to occupy.
+    int titleBarH = titleBar ? titleBar->height() : 34;
     int margin = 8;
-    topMenuRestoreBtn->move(width() - topMenuRestoreBtn->width() - margin, margin + 2);
+    topMenuRestoreBtn->move(width() - topMenuRestoreBtn->width() - margin, titleBarH + margin);
 }
 
 void MainWindow::changeEvent(QEvent* event)
