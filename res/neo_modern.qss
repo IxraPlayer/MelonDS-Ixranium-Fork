@@ -427,6 +427,38 @@ QProgressBar::chunk {
     background-color: #1e2130;
 }
 
+#topMenuBar {
+    background-color: #121319;
+    border-bottom: 1px solid #262b36;
+}
+
+#topMenuButton {
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 13px;
+    color: #b7bcc8;
+    padding: 4px 4px 4px 4px;
+}
+
+#topMenuButton:hover {
+    background-color: #21252f;
+    border: 1px solid #7c4dff;
+    color: #ffffff;
+}
+
+#topMenuButton:pressed {
+    background-color: #1e2130;
+    border: 1px solid #a97bff;
+    padding: 7px 4px 3px 4px;
+}
+
+#topMenuButton::menu-indicator {
+    image: none;
+    width: 0px;
+}
+
 #playButton {
     background-color: #7c4dff;
     border: none;
