@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/melonDS-emu/melonDS/master/res/icon/melon_128x128.png"></p>
+<p align="center"><img width="128" height="128" alt="melondsixraniumfork" src="https://github.com/user-attachments/assets/7ca774e6-573d-4de0-8d5d-416519bd6089" />
 <h2 align="center"><b>MelonDS - Ixranium Fork</b></h2>
 <p align="center">
 <a href="http://melonds.kuribo64.net/" alt="melonDS website"><img src="https://img.shields.io/badge/website-melonds.kuribo64.net-%2331352e.svg"></a>
