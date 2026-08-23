@@ -179,7 +179,7 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
 
 void LibraryScreen::onBgTick()
 {
-    bgPhase += 0.0070; // 2x speed
+    bgPhase += 0.0035;
     if (bgPhase > 1000.0) bgPhase -= 1000.0; // keep the accumulator from growing unbounded across a long session
     update();
 }
@@ -236,13 +236,15 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
         painter.fillPath(path, blob);
     }
 
-    // Permanent black vignette: stays constant regardless of the bg
-    // animation, darkening the corners/edges while leaving the center
-    // clear so tiles/text stay readable.
+    // Vignette: darken toward the center so tiles/text stay readable
+    // against a busy animated background, while fading out to nothing
+    // near the edges - that fade is what makes the border blend smoothly
+    // into the center instead of reading as two separate flat panels
+    // stacked with a hard seam between them.
     QRadialGradient vignette(r.center(), std::max(r.width(), r.height()) * 0.75);
-    vignette.setColorAt(0.0, QColor(0, 0, 0, 0));
-    vignette.setColorAt(0.6, QColor(0, 0, 0, 90));
-    vignette.setColorAt(1.0, QColor(0, 0, 0, 220));
+    vignette.setColorAt(0.0, QColor(6, 8, 12, 235));
+    vignette.setColorAt(0.55, QColor(6, 8, 12, 190));
+    vignette.setColorAt(1.0, QColor(6, 8, 12, 0));
     painter.fillPath(path, vignette);
 
     QWidget::paintEvent(event);
