@@ -64,6 +64,11 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     addTile = new QToolButton(this);
     addTile->setObjectName("addGameTile");
     addTile->setAttribute(Qt::WA_StyledBackground, true);
+    addTile->setStyleSheet(
+        "QToolButton#addGameTile { background-color: #121319; border: 2px dashed #262a36; "
+        "border-radius: 20px; color: #565b68; font-size: 34px; font-weight: 300; }"
+        "QToolButton#addGameTile:hover { border: 2px dashed #3d5afe; color: #6c85ff; background-color: #161821; }"
+        "QToolButton#addGameTile:pressed { border: 2px solid #6c85ff; color: #6c85ff; background-color: #1e2130; }");
     addTile->setText("+");
     addTile->setFixedSize(140, 140);
     addTile->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -379,6 +384,15 @@ void LibraryScreen::addGame(const QString& path)
     // background - which let the animated library background show
     // straight through the tile instead of the card surface.
     tile->setAttribute(Qt::WA_StyledBackground, true);
+    // Belt-and-suspenders: also set the background directly on the widget
+    // itself (highest-priority stylesheet, always wins over the app-level
+    // .qss regardless of any theme-reload/ordering quirk) so the card
+    // never depends on the global stylesheet having been (re)applied.
+    tile->setStyleSheet(
+        "QToolButton#gameCard { background-color: #121319; border: 1px solid #262b36; "
+        "border-radius: 20px; color: #eef0f5; font-weight: 600; padding-top: 8px; }"
+        "QToolButton#gameCard:hover { background-color: #21252f; border: 1px solid #3d5afe; }"
+        "QToolButton#gameCard:pressed { background-color: #1e2130; border: 1px solid #6c85ff; }");
     tile->setText(displayName(path));
     tile->setFixedSize(140, 140);
     tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
