@@ -5,15 +5,65 @@
 #include <QPushButton>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QPainter>
+#include <QPainterPath>
+#include <QMouseEvent>
+#include <QWindow>
+#include <QResizeEvent>
+
+namespace
+{
+    // Thin drag strip along the top so the now-frameless dialog can still
+    // be repositioned - same startSystemMove() approach CustomTitleBar
+    // uses for the main window, just without the min/max/close buttons
+    // (closing happens via the existing "Close" button at the bottom).
+    class SettingsDragStrip : public QWidget
+    {
+    public:
+        explicit SettingsDragStrip(QWidget* parent) : QWidget(parent)
+        {
+            setFixedHeight(30);
+            auto* l = new QHBoxLayout(this);
+            l->setContentsMargins(16, 0, 0, 0);
+            auto* label = new QLabel(QObject::tr("Settings"), this);
+            label->setStyleSheet("QLabel { color: rgba(255,255,255,190); font-size: 12px; "
+                                  "font-weight: bold; background: transparent; }");
+            l->addWidget(label);
+            l->addStretch();
+        }
+
+    protected:
+        void mousePressEvent(QMouseEvent* event) override
+        {
+            if (event->button() == Qt::LeftButton && window()->windowHandle())
+                window()->windowHandle()->startSystemMove();
+        }
+    };
+}
 
 SettingsHubDialog::SettingsHubDialog(QWidget* parent) : QDialog(parent)
 {
     setWindowTitle("Settings");
     setMinimumSize(680, 480);
 
-    auto* root = new QHBoxLayout(this);
+    // Frameless with rounded corners, same technique MainWindow already
+    // uses for its own glassy look (see updateFramelessWindowMask() in
+    // Window.cpp): opaque backing + a rounded QRegion mask, tinted via a
+    // translucent fillPath in paintEvent(). This dialog never had either
+    // applied before, which is why it read as a flat solid box instead of
+    // matching the rest of the app's glass style.
+    setWindowFlag(Qt::FramelessWindowHint, true);
+
+    auto* outerV = new QVBoxLayout(this);
+    outerV->setContentsMargins(0, 0, 0, 0);
+    outerV->setSpacing(0);
+
+    outerV->addWidget(new SettingsDragStrip(this));
+
+    auto* root = new QHBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
+    outerV->addLayout(root, 1);
 
     sidebar = new QListWidget(this);
     sidebar->setObjectName("sidebarPanel");
@@ -57,6 +107,32 @@ SettingsHubDialog::SettingsHubDialog(QWidget* parent) : QDialog(parent)
     root->addLayout(right, 1);
 
     connect(sidebar, &QListWidget::itemClicked, this, &SettingsHubDialog::onItemClicked);
+}
+
+void SettingsHubDialog::paintEvent(QPaintEvent*)
+{
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const qreal radius = 14.0;
+    QPainterPath path;
+    path.addRoundedRect(rect(), radius, radius);
+
+    // Genuinely translucent this time (alpha 205, not the near-opaque 235
+    // the .qss themes use elsewhere) - now that WA_TranslucentBackground
+    // is actually set, this blends against the desktop/game behind it
+    // instead of an opaque backing store.
+    painter.fillPath(path, QColor(0x12, 0x14, 0x1a, 205));
+}
+
+void SettingsHubDialog::resizeEvent(QResizeEvent* event)
+{
+    QDialog::resizeEvent(event);
+
+    const int radius = 14;
+    QPainterPath path;
+    path.addRoundedRect(rect(), radius, radius);
+    setMask(QRegion(path.toFillPolygon().toPolygon()));
 }
 
 int SettingsHubDialog::addCategory(const QString& title)

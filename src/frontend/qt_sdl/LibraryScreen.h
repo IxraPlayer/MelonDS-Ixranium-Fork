@@ -41,6 +41,9 @@ protected:
     // another tile reorders the library list around that drop target.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
+private slots:
+    void onBgTick();
+
 private:
     void relayout();
     QString displayName(const QString& path) const;
@@ -57,6 +60,8 @@ private:
     QPoint dragStartPos;
 
     double bgHue;
+    double bgPhase = 0.0;
+    QTimer* bgAnimTimer;
 };
 
 #endif

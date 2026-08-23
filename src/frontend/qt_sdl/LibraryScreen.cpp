@@ -10,6 +10,8 @@
 #include <QPainterPath>
 #include <QLinearGradient>
 #include <cstddef>
+#include <cmath>
+#include <algorithm>
 
 #include "NDS_Header.h"
 #include <QMouseEvent>
@@ -28,6 +30,13 @@ using namespace melonDS;
 LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
 {
     setObjectName("libraryScreen");
+
+    // Slow animated wave between turquoise and near-black, redrawn in
+    // paintEvent(). ~20fps is plenty for something this gradual - no
+    // point burning cycles animating a background that moves this slowly.
+    bgAnimTimer = new QTimer(this);
+    connect(bgAnimTimer, &QTimer::timeout, this, &LibraryScreen::onBgTick);
+    bgAnimTimer->start(50);
 
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(24, 24, 24, 24);
@@ -160,6 +169,13 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+void LibraryScreen::onBgTick()
+{
+    bgPhase += 0.0035;
+    if (bgPhase > 1000.0) bgPhase -= 1000.0; // keep the accumulator from growing unbounded across a long session
+    update();
+}
+
 void LibraryScreen::paintEvent(QPaintEvent* event)
 {
     QPainter painter(this);
@@ -183,7 +199,28 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     path.arcTo(r.left(), r.bottom() - 2 * radius, 2 * radius, 2 * radius, -90, -90);
     path.closeSubpath();
 
-    painter.fillPath(path, QColor(0x14, 0x16, 0x1c));
+    // Water-like drift: a diagonal gradient between deep near-black-blue
+    // and turquoise, with each stop's position nudged by its own phase
+    // offset+speed so the bands don't move in lockstep - reads like slow
+    // moving water instead of a single sliding bar.
+    QColor deep(5, 10, 18);
+    QColor turquoise(0, 176, 176);
+    QColor midBlue(10, 40, 70);
+
+    QLinearGradient grad(r.topLeft(), r.bottomRight());
+    auto wave = [this](double base, double speed, double amp)
+    {
+        const double twoPi = 6.283185307179586;
+        double v = base + amp * std::sin(bgPhase * speed * twoPi);
+        return std::clamp(v, 0.0, 1.0);
+    };
+
+    grad.setColorAt(0.0, deep);
+    grad.setColorAt(wave(0.35, 0.6, 0.12), midBlue);
+    grad.setColorAt(wave(0.65, 0.8, 0.15), turquoise);
+    grad.setColorAt(1.0, deep);
+
+    painter.fillPath(path, grad);
 
     QWidget::paintEvent(event);
 }

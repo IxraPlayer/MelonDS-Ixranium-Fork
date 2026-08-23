@@ -40,6 +40,9 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QEasingCurve>
 #include <QPainterPath>
 #include <QRegion>
 #include <QTimer>
@@ -2732,9 +2735,9 @@ void MainWindow::positionTopMenuRestoreBtn()
 
 namespace
 {
-    // Full-window dimmer behind the pause menu buttons. Just a flat
-    // translucent black rect - keeps this independent of whichever theme
-    // (dark_glass / neo_modern) is active rather than trying to match it.
+    // Full-window dimmer behind the pause menu buttons. Much lighter than
+    // a flat black overlay: the frozen game frame should still read
+    // clearly through it, not get buried under an opaque layer.
     class PauseMenuDimmer : public QWidget
     {
     public:
@@ -2744,7 +2747,7 @@ namespace
         void paintEvent(QPaintEvent*) override
         {
             QPainter p(this);
-            p.fillRect(rect(), QColor(0, 0, 0, 165));
+            p.fillRect(rect(), QColor(6, 8, 14, 92));
         }
     };
 }
@@ -2767,12 +2770,15 @@ void MainWindow::togglePauseMenu()
 
     auto* box = new QWidget(pauseMenuOverlay);
     box->setFixedWidth(240);
+    // Frameless glass panel: no border at all (per request), just a soft
+    // translucent fill so the paused frame behind it stays visible through
+    // the whole box, not just the dimmer around it.
     box->setStyleSheet(
-        "QWidget { background: rgba(30,32,40,235); border-radius: 10px; }"
-        "QPushButton { color: white; background: rgba(255,255,255,20); "
-        "  border: none; border-radius: 6px; padding: 10px; font-size: 13px; }"
-        "QPushButton:hover { background: rgba(255,255,255,45); }"
-        "QPushButton:disabled { color: rgba(255,255,255,90); }");
+        "QWidget { background: rgba(24,26,34,150); border-radius: 14px; border: none; }"
+        "QPushButton { color: white; background: rgba(255,255,255,25); "
+        "  border: none; border-radius: 8px; padding: 11px; font-size: 13px; }"
+        "QPushButton:hover { background: rgba(255,255,255,60); }"
+        "QPushButton:disabled { color: rgba(255,255,255,90); background: rgba(255,255,255,10); }");
     auto* boxLayout = new QVBoxLayout(box);
     boxLayout->setSpacing(8);
     boxLayout->setContentsMargins(18, 18, 18, 18);
@@ -2826,8 +2832,21 @@ void MainWindow::togglePauseMenu()
     outer->addLayout(boxRow);
     outer->addStretch();
 
+    // Fade the whole overlay (dimmer + panel together) in rather than
+    // popping it in instantly - reads much less jarring mid-gameplay.
+    auto* fx = new QGraphicsOpacityEffect(pauseMenuOverlay);
+    pauseMenuOverlay->setGraphicsEffect(fx);
+    fx->setOpacity(0.0);
+
+    auto* fadeIn = new QPropertyAnimation(fx, "opacity", pauseMenuOverlay);
+    fadeIn->setDuration(160);
+    fadeIn->setStartValue(0.0);
+    fadeIn->setEndValue(1.0);
+    fadeIn->setEasingCurve(QEasingCurve::OutCubic);
+
     pauseMenuOverlay->show();
     pauseMenuOverlay->raise();
+    fadeIn->start(QAbstractAnimation::DeleteWhenStopped);
     btnResume->setFocus();
 }
 
@@ -2835,8 +2854,20 @@ void MainWindow::closePauseMenu()
 {
     if (!pauseMenuOverlay) return;
 
-    pauseMenuOverlay->deleteLater();
-    pauseMenuOverlay = nullptr;
+    QWidget* overlay = pauseMenuOverlay;
+    pauseMenuOverlay = nullptr; // reflects "closed" immediately, so a
+                                // second Escape mid-fade-out re-opens
+                                // cleanly instead of trying to fade an
+                                // overlay that's already on its way out
+
+    auto* fx = qobject_cast<QGraphicsOpacityEffect*>(overlay->graphicsEffect());
+    auto* fadeOut = new QPropertyAnimation(fx, "opacity", overlay);
+    fadeOut->setDuration(120);
+    fadeOut->setStartValue(fx ? fx->opacity() : 1.0);
+    fadeOut->setEndValue(0.0);
+    fadeOut->setEasingCurve(QEasingCurve::InCubic);
+    connect(fadeOut, &QPropertyAnimation::finished, overlay, &QWidget::deleteLater);
+    fadeOut->start(QAbstractAnimation::DeleteWhenStopped);
 
     emuThread->emuUnpause();
 }
