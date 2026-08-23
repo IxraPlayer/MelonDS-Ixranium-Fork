@@ -207,28 +207,34 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     path.arcTo(r.left(), r.bottom() - 2 * radius, 2 * radius, 2 * radius, -90, -90);
     path.closeSubpath();
 
-    // Water-like drift: a diagonal gradient between deep near-black-blue
-    // and turquoise, with each stop's position nudged by its own phase
-    // offset+speed so the bands don't move in lockstep - reads like slow
-    // moving water instead of a single sliding bar.
+    // Water-like drift: instead of one fixed diagonal gradient (which
+    // always put the turquoise in the same corner, just wobbling in
+    // place), scatter a few soft turquoise/blue "blobs" that drift around
+    // independently on their own lissajous-style paths, over a solid deep
+    // base. Reads as moving water instead of a static banded gradient.
     QColor deep(5, 10, 18);
-    QColor turquoise(0, 176, 176);
-    QColor midBlue(10, 40, 70);
+    painter.fillPath(path, deep);
 
-    QLinearGradient grad(r.topLeft(), r.bottomRight());
-    auto wave = [this](double base, double speed, double amp)
-    {
-        const double twoPi = 6.283185307179586;
-        double v = base + amp * std::sin(bgPhase * speed * twoPi);
-        return std::clamp(v, 0.0, 1.0);
+    struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
+    static const Blob blobs[] = {
+        { 0.55, 0.40, 0.0,  1.7, 0.32, 0.30, 0.55, QColor(0, 176, 176, 150) },
+        { 0.35, 0.62, 2.1,  0.4, 0.30, 0.34, 0.60, QColor(10, 120, 170, 130) },
+        { 0.70, 0.28, 4.2,  3.0, 0.28, 0.26, 0.45, QColor(0, 200, 190, 110) },
     };
 
-    grad.setColorAt(0.0, deep);
-    grad.setColorAt(wave(0.35, 0.6, 0.12), midBlue);
-    grad.setColorAt(wave(0.65, 0.8, 0.15), turquoise);
-    grad.setColorAt(1.0, deep);
+    const double twoPi = 6.283185307179586;
+    for (const Blob& b : blobs)
+    {
+        double cx = r.left() + r.width()  * (0.5 + b.rx * std::sin(bgPhase * b.speedX * twoPi + b.phaseX));
+        double cy = r.top()  + r.height() * (0.5 + b.ry * std::cos(bgPhase * b.speedY * twoPi + b.phaseY));
+        double radius = r.width() * b.radius;
 
-    painter.fillPath(path, grad);
+        QRadialGradient blob(QPointF(cx, cy), radius);
+        blob.setColorAt(0.0, b.color);
+        blob.setColorAt(1.0, QColor(b.color.red(), b.color.green(), b.color.blue(), 0));
+
+        painter.fillPath(path, blob);
+    }
 
     // Vignette: darken toward the center so tiles/text stay readable
     // against a busy animated background, while fading out to nothing
