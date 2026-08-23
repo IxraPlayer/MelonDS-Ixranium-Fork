@@ -10,6 +10,9 @@
 #include <QPainterPath>
 #include <QLinearGradient>
 #include <QRadialGradient>
+#include <QConicalGradient>
+#include <QElapsedTimer>
+#include <QFontMetrics>
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
@@ -25,6 +28,106 @@
 // MIME type used to carry the dragged tile's ROM path during a
 // press-and-drag reorder within the library grid.
 static const char* kGameDragMime = "application/x-melonds-game-path";
+
+// Custom-painted tile: fully bypasses QToolButton's own style-based
+// painting (which kept fighting the app's global .qss for the
+// background) in favor of drawing everything ourselves. This is what
+// makes a real ~50% translucent glass panel and the animated glow
+// border possible - QSS alone can't animate, and letting QStyle draw
+// its own panel on top of a custom background is what caused the
+// "transparent tile showing the animated backdrop" bug earlier.
+class GameCardButton : public QToolButton
+{
+public:
+    explicit GameCardButton(bool addTileStyle, QWidget* parent)
+        : QToolButton(parent), isAddTile(addTileStyle)
+    {
+        glowClock.start();
+        auto* t = new QTimer(this);
+        connect(t, &QTimer::timeout, this, [this] { update(); });
+        t->start(50);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const qreal radius = 20.0;
+        QRectF r = rect().adjusted(0.75, 0.75, -0.75, -0.75);
+        QPainterPath path;
+        path.addRoundedRect(r, radius, radius);
+
+        // ~50% translucent glass panel, slightly brighter on hover/press.
+        QColor bg = isDown()      ? QColor(30, 34, 42, 150)
+                  : underMouse()  ? QColor(26, 30, 38, 145)
+                                  : QColor(18, 20, 25, 128);
+        painter.fillPath(path, bg);
+
+        // Qt/QSS has no real backdrop-blur (can't blur what's actually
+        // behind the widget without re-rendering it every frame), so this
+        // is a practical stand-in: a soft diagonal white sheen that reads
+        // as frosted glass rather than a flat translucent color.
+        QLinearGradient sheen(r.topLeft(), r.bottomRight());
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 22));
+        sheen.setColorAt(0.5, QColor(255, 255, 255, 5));
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
+        painter.fillPath(path, sheen);
+
+        // Thin turquoise base border, always visible.
+        painter.strokePath(path, QPen(QColor(72, 226, 226, 100), 1.1));
+
+        // Bright white glow that slowly travels around the border, via a
+        // conical gradient whose angle advances over time - cheap and
+        // smooth compared to animating a path sub-segment by hand.
+        double angleDeg = std::fmod(glowClock.elapsed() / 45.0, 360.0);
+        QConicalGradient glow(r.center(), angleDeg);
+        glow.setColorAt(0.00, QColor(255, 255, 255, 240));
+        glow.setColorAt(0.06, QColor(160, 240, 240, 70));
+        glow.setColorAt(0.50, QColor(90, 220, 220, 0));
+        glow.setColorAt(0.94, QColor(160, 240, 240, 70));
+        glow.setColorAt(1.00, QColor(255, 255, 255, 240));
+        painter.strokePath(path, QPen(QBrush(glow), 1.5));
+
+        painter.setClipPath(path);
+
+        if (isAddTile)
+        {
+            QFont f = font();
+            f.setPixelSize(34);
+            f.setWeight(QFont::Light);
+            painter.setFont(f);
+            painter.setPen(underMouse() ? QColor(157, 123, 255) : QColor(90, 95, 110));
+            painter.drawText(r, Qt::AlignCenter, "+");
+            return;
+        }
+
+        const int iconSize = 64;
+        QIcon ic = icon();
+        if (!ic.isNull())
+        {
+            QPixmap pix = ic.pixmap(iconSize, iconSize);
+            qreal ix = r.center().x() - pix.width() / 2.0;
+            qreal iy = r.top() + 16;
+            painter.drawPixmap(QPointF(ix, iy), pix);
+        }
+
+        QFont f = font();
+        f.setPixelSize(13);
+        f.setBold(true);
+        painter.setFont(f);
+        painter.setPen(QColor(238, 240, 245));
+        QFontMetrics fm(f);
+        QString elided = fm.elidedText(text(), Qt::ElideMiddle, int(r.width() - 16));
+        QRectF textRect(r.left() + 8, r.bottom() - 32, r.width() - 16, 24);
+        painter.drawText(textRect, Qt::AlignHCenter | Qt::AlignTop, elided);
+    }
+
+private:
+    bool isAddTile;
+    QElapsedTimer glowClock;
+};
 
 using namespace melonDS;
 
@@ -61,14 +164,8 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     scroll->setWidget(inner);
     outer->addWidget(scroll);
 
-    addTile = new QToolButton(this);
+    addTile = new GameCardButton(true, this);
     addTile->setObjectName("addGameTile");
-    addTile->setAttribute(Qt::WA_StyledBackground, true);
-    addTile->setStyleSheet(
-        "QToolButton#addGameTile { background-color: #121319; border: 2px dashed #262a36; "
-        "border-radius: 20px; color: #565b68; font-size: 34px; font-weight: 300; }"
-        "QToolButton#addGameTile:hover { border: 2px dashed #3d5afe; color: #6c85ff; background-color: #161821; }"
-        "QToolButton#addGameTile:pressed { border: 2px solid #6c85ff; color: #6c85ff; background-color: #1e2130; }");
     addTile->setText("+");
     addTile->setFixedSize(140, 140);
     addTile->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -377,22 +474,8 @@ void LibraryScreen::addGame(const QString& path)
 
     paths.append(path);
 
-    auto* tile = new QToolButton(this);
+    auto* tile = new GameCardButton(false, this);
     tile->setObjectName("gameCard");
-    // Without this, QToolButton ignores the #gameCard background-color /
-    // border from the .qss entirely and just paints its default (no)
-    // background - which let the animated library background show
-    // straight through the tile instead of the card surface.
-    tile->setAttribute(Qt::WA_StyledBackground, true);
-    // Belt-and-suspenders: also set the background directly on the widget
-    // itself (highest-priority stylesheet, always wins over the app-level
-    // .qss regardless of any theme-reload/ordering quirk) so the card
-    // never depends on the global stylesheet having been (re)applied.
-    tile->setStyleSheet(
-        "QToolButton#gameCard { background-color: #121319; border: 1px solid #262b36; "
-        "border-radius: 20px; color: #eef0f5; font-weight: 600; padding-top: 8px; }"
-        "QToolButton#gameCard:hover { background-color: #21252f; border: 1px solid #3d5afe; }"
-        "QToolButton#gameCard:pressed { background-color: #1e2130; border: 1px solid #6c85ff; }");
     tile->setText(displayName(path));
     tile->setFixedSize(140, 140);
     tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
