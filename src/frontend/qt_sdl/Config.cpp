@@ -315,6 +315,7 @@ LegacyEntry LegacyFile[] =
     {"PauseLostFocus",   1, "PauseLostFocus", false},
     {"MuteFastForward",   1, "MuteFastForward", false},
     {"UITheme",          2, "UITheme", false},
+    {"UIQSSTheme",       2, "UIQSSTheme", false},
 
     {"RTCOffset",       3, "RTC.Offset", true},
 

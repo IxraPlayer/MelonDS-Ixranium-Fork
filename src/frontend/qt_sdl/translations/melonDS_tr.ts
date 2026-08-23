@@ -1041,4 +1041,65 @@
         <translation>Yalnızca 1. örnek</translation>
     </message>
 </context>
+<context>
+    <name>WelcomeDialog</name>
+    <message>
+        <source>Welcome to melonDS</source>
+        <translation>MelonDS - Ixranium Fork'a hoş geldiniz</translation>
+    </message>
+    <message>
+        <source>Welcome!</source>
+        <translation>Hoş geldiniz!</translation>
+    </message>
+    <message>
+        <source>Let's get a couple of things set up before you start.</source>
+        <translation>Başlamadan önce birkaç ayarı yapalım.</translation>
+    </message>
+    <message>
+        <source>What should we call you?</source>
+        <translation>Size nasıl hitap edelim?</translation>
+    </message>
+    <message>
+        <source>Nickname</source>
+        <translation>Takma ad</translation>
+    </message>
+    <message>
+        <source>Interface language</source>
+        <translation>Arayüz dili</translation>
+    </message>
+    <message>
+        <source>System default</source>
+        <translation>Sistem varsayılanı</translation>
+    </message>
+    <message>
+        <source>Get started</source>
+        <translation>Başla</translation>
+    </message>
+</context>
+<context>
+    <name>DebugSettingsDialog</name>
+    <message>
+        <source>Debug overlay</source>
+        <translation>Hata ayıklama katmanı</translation>
+    </message>
+    <message>
+        <source>Toggle debug overlay</source>
+        <translation>Hata ayıklama katmanını aç/kapat</translation>
+    </message>
+    <message>
+        <source>Overlay fields</source>
+        <translation>Katman alanları</translation>
+    </message>
+    <message>
+        <source>Choose what the in-game debug overlay shows.</source>
+        <translation>Oyun içi hata ayıklama katmanının neleri göstereceğini seçin.</translation>
+    </message>
+</context>
+<context>
+    <name>TopMenuBar</name>
+    <message>
+        <source>Hide menu</source>
+        <translation>Menüyü gizle</translation>
+    </message>
+</context>
 </TS>
