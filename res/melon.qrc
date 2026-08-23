@@ -5,5 +5,9 @@
 		<file alias="melon-logo">melon384.png</file>
 		<file alias="dark_glass">dark_glass.qss</file>
 		<file alias="neo_modern">neo_modern.qss</file>
+		<file alias="ixranium_blue">ixranium_blue.qss</file>
+		<file alias="ixranium_red">ixranium_red.qss</file>
+		<file alias="ixranium_green">ixranium_green.qss</file>
+		<file alias="ixranium_purple">ixranium_purple.qss</file>
 	</qresource>
 </RCC>

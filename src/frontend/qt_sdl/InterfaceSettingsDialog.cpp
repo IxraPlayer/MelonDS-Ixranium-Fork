@@ -69,6 +69,14 @@ InterfaceSettingsDialog::InterfaceSettingsDialog(QWidget* parent) : QDialog(pare
     else
         ui->cbxQSSTheme->setCurrentIndex(0);
 
+    ui->cbxIxraniumColor->addItem("None", "");
+    ui->cbxIxraniumColor->addItem("Blue", "ixranium_blue");
+    ui->cbxIxraniumColor->addItem("Red", "ixranium_red");
+    ui->cbxIxraniumColor->addItem("Green", "ixranium_green");
+    ui->cbxIxraniumColor->addItem("Purple", "ixranium_purple");
+    int ixraniumIdx = ui->cbxIxraniumColor->findData(cfgQSSTheme);
+    ui->cbxIxraniumColor->setCurrentIndex(ixraniumIdx >= 0 ? ixraniumIdx : 0);
+
     // Available UI languages. "" (System default) uses the OS locale, like before.
     // Add new entries here whenever a new translations/melonDS_XX.ts is added.
     static const QList<QPair<QString, QString>> languages = {
@@ -173,7 +181,8 @@ void InterfaceSettingsDialog::done(int r)
         QString themeName = ui->cbxUITheme->currentData().toString();
         cfg.SetQString("UITheme", themeName);
 
-        QString qssThemeName = ui->cbxQSSTheme->currentData().toString();
+        QString ixraniumColor = ui->cbxIxraniumColor->currentData().toString();
+        QString qssThemeName = !ixraniumColor.isEmpty() ? ixraniumColor : ui->cbxQSSTheme->currentData().toString();
         cfg.SetQString("UIQSSTheme", qssThemeName);
 
         QString langCode = ui->cbxUILanguage->currentData().toString();

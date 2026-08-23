@@ -342,7 +342,9 @@ int main(int argc, char** argv)
         melon.installTranslator(&translator);
 
     QString uiTheme = Config::GetGlobalTable().GetQString("UIQSSTheme");
-    if (uiTheme != "dark_glass" && uiTheme != "neo_modern")
+    if (uiTheme != "dark_glass" && uiTheme != "neo_modern" &&
+        uiTheme != "ixranium_blue" && uiTheme != "ixranium_red" &&
+        uiTheme != "ixranium_green" && uiTheme != "ixranium_purple")
         uiTheme = "dark_glass";
 
     QFile styleFile(":/" + uiTheme);
