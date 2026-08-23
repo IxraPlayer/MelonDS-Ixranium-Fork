@@ -35,6 +35,7 @@ set(SOURCES_QT_SDL
     InterfaceSettingsDialog.cpp
     DebugSettingsDialog.cpp
     DebugOverlayStats.h
+    DebugOverlayFields.h
     WelcomeDialog.cpp
     ROMInfoDialog.cpp
     RAMInfoDialog.cpp

@@ -24,11 +24,11 @@
 class MainWindow;
 class EmuInstance;
 
-// Settings > Debug settings. Intentionally minimal: the only thing here is
-// the keyboard hotkey used to toggle the in-game FPS/CPU/RAM overlay
-// (HK_ToggleDebugOverlay). Everything else about the overlay itself lives
-// in ScreenPanel (Screen.h/.cpp) - this dialog just lets the user bind a
-// key to it, same as any other hotkey in Input and hotkeys.
+// Settings > Debug settings. Lets the user bind a key to toggle the
+// in-game debug overlay (HK_ToggleDebugOverlay), and pick which stats
+// that overlay actually shows via one checkbox per field - see
+// DebugOverlayFields.h for the field list, and ScreenPanel (Screen.h/.cpp)
+// for how the overlay itself is drawn.
 class DebugSettingsDialog : public QDialog
 {
     Q_OBJECT

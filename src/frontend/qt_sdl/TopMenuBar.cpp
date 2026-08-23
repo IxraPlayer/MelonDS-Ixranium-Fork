@@ -17,6 +17,7 @@
 */
 
 #include "TopMenuBar.h"
+#include "LibraryScreen.h"
 
 #include <QHBoxLayout>
 #include <QMenu>
@@ -269,7 +270,7 @@ void TopMenuBar::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    QColor lineColor = QColor::fromHsvF(glowHue, 0.70, 0.95);
+    QColor lineColor = QColor::fromHsvF(std::fmod(glowHue + LibraryScreen::AccentHueShift / 360.0, 1.0), 0.70, 0.95);
 
     const qreal y = height() - 2.0;
 

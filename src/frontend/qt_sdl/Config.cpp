@@ -30,6 +30,7 @@
 #include "Config.h"
 #include "ScreenLayout.h"
 #include "main.h"
+#include "DebugOverlayFields.h"
 
 using namespace std::string_literals;
 
@@ -72,6 +73,7 @@ DefaultList<int> DefaultInts =
     {"Instance*.Gdb.ARM9.Port", 3333},
 #endif
     {"LAN.HostNumPlayers", 16},
+    {"DebugOverlay.Fields", (int)kDebugOverlayDefaultMask},
 };
 
 RangeList IntRanges =

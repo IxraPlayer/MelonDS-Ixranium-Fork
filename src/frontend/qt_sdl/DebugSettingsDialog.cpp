@@ -21,6 +21,7 @@
 #include <QLabel>
 #include <QGroupBox>
 #include <QPushButton>
+#include <QCheckBox>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <functional>
@@ -31,6 +32,7 @@
 
 #include "DebugSettingsDialog.h"
 #include "EmuInstance.h"
+#include "DebugOverlayFields.h"
 
 namespace
 {
@@ -141,8 +143,7 @@ DebugSettingsDialog::DebugSettingsDialog(QWidget* parent) : QDialog(parent)
     auto* groupLayout = new QVBoxLayout(group);
 
     auto* hint = new QLabel(tr(
-        "Assign a key to show/hide the in-game FPS, CPU and RAM overlay.\n"
-        "Everything else on this page is intentionally left empty."));
+        "Assign a key to show/hide the in-game FPS, CPU and RAM overlay."));
     hint->setWordWrap(true);
     groupLayout->addWidget(hint);
 
@@ -162,6 +163,43 @@ DebugSettingsDialog::DebugSettingsDialog(QWidget* parent) : QDialog(parent)
     groupLayout->addLayout(row);
 
     layout->addWidget(group);
+
+    // One checkbox per overlay line (see DebugOverlayFields.h). Ticking a
+    // box adds that field to the on-screen overlay, unticking removes it -
+    // saved immediately to the global config as a bitmask so it's shared
+    // across instances/windows the same way the panel theme is, and read
+    // back by ScreenPanel::updateDebugOverlayText() every refresh.
+    auto* fieldsGroup = new QGroupBox(tr("Overlay fields"));
+    auto* fieldsLayout = new QVBoxLayout(fieldsGroup);
+
+    auto* fieldsHint = new QLabel(tr("Choose what the in-game debug overlay shows."));
+    fieldsHint->setWordWrap(true);
+    fieldsLayout->addWidget(fieldsHint);
+
+    Config::Table& globalCfg = emuInstance->getGlobalConfig();
+    unsigned int fieldMask = (unsigned int)globalCfg.GetInt("DebugOverlay.Fields");
+
+    for (int i = 0; i < DBGOV_COUNT; i++)
+    {
+        const DebugOverlayFieldInfo& info = kDebugOverlayFields[i];
+        auto* cb = new QCheckBox(tr(info.label));
+        cb->setChecked(fieldMask & (1u << info.id));
+
+        connect(cb, &QCheckBox::toggled, this, [this, id = info.id](bool checked)
+        {
+            Config::Table& cfg = emuInstance->getGlobalConfig();
+            unsigned int mask = (unsigned int)cfg.GetInt("DebugOverlay.Fields");
+            if (checked)
+                mask |= (1u << id);
+            else
+                mask &= ~(1u << id);
+            cfg.SetInt("DebugOverlay.Fields", (int)mask);
+        });
+
+        fieldsLayout->addWidget(cb);
+    }
+
+    layout->addWidget(fieldsGroup);
     layout->addStretch();
 }
 

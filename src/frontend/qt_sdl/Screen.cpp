@@ -23,12 +23,14 @@
 
 #include <QPaintEvent>
 #include <QPainter>
+#include <QStringList>
 
 #include <QDateTime>
 
 #include "OpenGLSupport.h"
 #include "duckstation/gl/context.h"
 #include "DebugOverlayStats.h"
+#include "DebugOverlayFields.h"
 
 #include "main.h"
 #include "EmuInstance.h"
@@ -299,37 +301,60 @@ bool ScreenPanel::debugOverlayVisible() const
 
 void ScreenPanel::updateDebugOverlayText()
 {
-    double ramMB = 0.0, cpuPercent = 0.0;
-    bool gotRAM = false, gotCPU = false;
+    unsigned int mask = (unsigned int)emuInstance->getGlobalConfig().GetInt("DebugOverlay.Fields");
+
+    QStringList lines;
+
+    if (mask & (1u << DBGOV_FPS))
+        lines << QString("FPS: %1").arg((int)round(emuInstance ? emuInstance->measuredFPS : 0.0));
+
+    if (mask & (1u << DBGOV_FrameTime))
     {
-        double ram, cpu;
-        if (DebugOverlayStats::Sample(ram, cpu))
-        {
-            // Sample() reports true if at least one of the two worked;
-            // re-check each individually so we can show "N/A" only for
-            // the one that actually failed on this platform.
-            ramMB = ram;
-            cpuPercent = cpu;
-        }
-        gotRAM = true;  // best-effort: overwritten to false below if 0 stayed default AND read failed
-        gotCPU = true;
+        double fps = emuInstance ? emuInstance->measuredFPS : 0.0;
+        double ms = fps > 0.0 ? (1000.0 / fps) : 0.0;
+        lines << QString("Frame time: %1 ms").arg(ms, 0, 'f', 2);
     }
 
-    QString ramStr = gotRAM ? QString("%1 MB").arg(ramMB, 0, 'f', 1) : QString("N/A");
-    QString cpuStr = gotCPU ? QString("%1%").arg(cpuPercent, 0, 'f', 1) : QString("N/A");
+    if (mask & (1u << DBGOV_TargetFPS))
+        lines << QString("Target FPS: %1").arg(emuInstance ? emuInstance->targetFPS : 0.0, 0, 'f', 1);
 
-    QString text = QString(
-        "FPS: %1\n"
-        "CPU: %2\n"
-        "RAM: %3\n"
-        "Res: %4x%5")
-        .arg((int)round(emuInstance ? emuInstance->curFPS : 0.0))
-        .arg(cpuStr)
-        .arg(ramStr)
-        .arg(width())
-        .arg(height());
+    if (mask & ((1u << DBGOV_CPU) | (1u << DBGOV_RAM)))
+    {
+        double ram, cpu;
+        bool got = DebugOverlayStats::Sample(ram, cpu);
 
-    debugOverlayLabel->setText(text);
+        if (mask & (1u << DBGOV_CPU))
+            lines << QString("CPU: %1").arg(got ? QString("%1%").arg(cpu, 0, 'f', 1) : QString("N/A"));
+
+        if (mask & (1u << DBGOV_RAM))
+            lines << QString("RAM: %1").arg(got ? QString("%1 MB").arg(ram, 0, 'f', 1) : QString("N/A"));
+    }
+
+    if (mask & (1u << DBGOV_Resolution))
+        lines << QString("Res: %1x%2").arg(width()).arg(height());
+
+    if (mask & (1u << DBGOV_Renderer))
+        lines << QString("Renderer: %1").arg((emuInstance && emuInstance->usesOpenGL()) ? "OpenGL" : "Software");
+
+    if (mask & (1u << DBGOV_Console))
+        lines << QString("Console: %1").arg((emuInstance && emuInstance->getConsoleType() == 1) ? "DSi" : "DS");
+
+    if (mask & (1u << DBGOV_FastForward))
+        lines << QString("Fast-forward: %1").arg((emuInstance && emuInstance->fastForwardToggled) ? "On" : "Off");
+
+    if (mask & (1u << DBGOV_AudioSync))
+        lines << QString("Audio sync: %1").arg((emuInstance && emuInstance->doAudioSync) ? "On" : "Off");
+
+    if (mask & (1u << DBGOV_CartLabel))
+        lines << QString("Cart: %1").arg((emuInstance && emuInstance->cartInserted()) ? emuInstance->cartLabel() : QString("None"));
+
+    if (mask & (1u << DBGOV_InstanceID))
+        lines << QString("Instance: %1").arg(emuInstance ? emuInstance->getInstanceID() : 0);
+
+    if (lines.isEmpty())
+        lines << "Debug overlay: no fields enabled";
+
+    debugOverlayLabel->setText(lines.join("\n"));
     debugOverlayLabel->adjustSize();
 }
 

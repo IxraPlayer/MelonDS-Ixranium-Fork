@@ -390,6 +390,10 @@ private:
 
     friend class EmuThread;
     friend class MainWindow;
+    // Lets the debug overlay (Screen.cpp) read cartLabel() and similar
+    // otherwise-private accessors directly instead of duplicating that
+    // logic or widening their visibility for everyone.
+    friend class ScreenPanel;
 };
 
 #endif //EMUINSTANCE_H
