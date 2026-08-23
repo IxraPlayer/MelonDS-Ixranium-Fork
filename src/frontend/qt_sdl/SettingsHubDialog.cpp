@@ -10,6 +10,7 @@
 #include <QMouseEvent>
 #include <QWindow>
 #include <QResizeEvent>
+#include <QShowEvent>
 
 namespace
 {
@@ -53,6 +54,14 @@ SettingsHubDialog::SettingsHubDialog(QWidget* parent) : QDialog(parent)
     // applied before, which is why it read as a flat solid box instead of
     // matching the rest of the app's glass style.
     setWindowFlag(Qt::FramelessWindowHint, true);
+    // Without these two, Qt fills the dialog's full rectangle with the
+    // opaque default palette color BEFORE paintEvent() runs - so the four
+    // corners outside our rounded path stayed a solid black square no
+    // matter what the mask below did. WA_NoSystemBackground skips that
+    // autofill; WA_TranslucentBackground makes the corners genuinely
+    // transparent (rather than black) wherever nothing gets painted.
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_NoSystemBackground);
 
     auto* outerV = new QVBoxLayout(this);
     outerV->setContentsMargins(0, 0, 0, 0);
@@ -128,7 +137,21 @@ void SettingsHubDialog::paintEvent(QPaintEvent*)
 void SettingsHubDialog::resizeEvent(QResizeEvent* event)
 {
     QDialog::resizeEvent(event);
+    updateRoundedMask();
+}
 
+void SettingsHubDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    // resizeEvent() alone isn't reliable here: if the dialog opens at its
+    // sizeHint with no further size change, no resizeEvent ever fires, so
+    // the corner mask never got applied and the black-square-corners bug
+    // showed on first open until the window was manually resized.
+    updateRoundedMask();
+}
+
+void SettingsHubDialog::updateRoundedMask()
+{
     const int radius = 14;
     QPainterPath path;
     path.addRoundedRect(rect(), radius, radius);

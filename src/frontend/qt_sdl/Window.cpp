@@ -47,6 +47,7 @@
 #include <QRegion>
 #include <QTimer>
 #include <QKeyEvent>
+#include <functional>
 #include <QMimeData>
 #include <QVector>
 #include <QCommandLineParser>
@@ -2718,7 +2719,13 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (resizeGrips) resizeGrips->updateGeometry();
     updateFramelessWindowMask(this);
     positionTopMenuRestoreBtn();
-    if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(rect());
+    if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
+}
+
+void MainWindow::moveEvent(QMoveEvent* event)
+{
+    QMainWindow::moveEvent(event);
+    if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
 }
 
 void MainWindow::positionTopMenuRestoreBtn()
@@ -2738,10 +2745,26 @@ namespace
     // Full-window dimmer behind the pause menu buttons. Much lighter than
     // a flat black overlay: the frozen game frame should still read
     // clearly through it, not get buried under an opaque layer.
+    //
+    // This is a genuine top-level window (Qt::Tool + WA_TranslucentBackground),
+    // not a plain child widget layered over ScreenPanelGL. The game view
+    // renders through a native/GL surface that bypasses normal Qt widget
+    // compositing, so a non-native child widget drawn "on top" of it in
+    // the widget tree doesn't reliably alpha-blend against it on every
+    // platform - it can end up looking fully opaque instead of see-through.
+    // Promoting the overlay to its own translucent top-level window lets
+    // the window manager/compositor do that blending instead, which does
+    // work reliably across native surfaces.
     class PauseMenuDimmer : public QWidget
     {
     public:
-        explicit PauseMenuDimmer(QWidget* parent) : QWidget(parent) {}
+        PauseMenuDimmer(QWidget* parent, std::function<void()> onEscape)
+            : QWidget(parent), onEscape(onEscape)
+        {
+            setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+            setAttribute(Qt::WA_TranslucentBackground);
+            setAttribute(Qt::WA_DeleteOnClose, false); // lifetime is managed by MainWindow, not by close()
+        }
 
     protected:
         void paintEvent(QPaintEvent*) override
@@ -2749,6 +2772,21 @@ namespace
             QPainter p(this);
             p.fillRect(rect(), QColor(6, 8, 14, 92));
         }
+
+        void keyPressEvent(QKeyEvent* event) override
+        {
+            // This window (not MainWindow) now owns keyboard focus while
+            // open, so Escape has to be caught here instead.
+            if (!event->isAutoRepeat() && event->key() == Qt::Key_Escape)
+            {
+                if (onEscape) onEscape();
+                return;
+            }
+            QWidget::keyPressEvent(event);
+        }
+
+    private:
+        std::function<void()> onEscape;
     };
 }
 
@@ -2762,14 +2800,19 @@ void MainWindow::togglePauseMenu()
 
     emuThread->emuPause();
 
-    pauseMenuOverlay = new PauseMenuDimmer(this);
-    pauseMenuOverlay->setGeometry(rect());
+    pauseMenuOverlay = new PauseMenuDimmer(this, [this]() { closePauseMenu(); });
+    pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
 
     auto* outer = new QVBoxLayout(pauseMenuOverlay);
     outer->addStretch();
 
     auto* box = new QWidget(pauseMenuOverlay);
     box->setFixedWidth(240);
+    // Plain QWidgets don't paint their stylesheet background at all by
+    // default (that's opt-in) - without this, "background: rgba(...);
+    // border-radius: 14px;" below either doesn't render or renders
+    // square, which is the same corner bug fixed in SettingsHubDialog.
+    box->setAttribute(Qt::WA_StyledBackground, true);
     // Frameless glass panel: no border at all (per request), just a soft
     // translucent fill so the paused frame behind it stays visible through
     // the whole box, not just the dimmer around it.
@@ -2842,11 +2885,12 @@ void MainWindow::togglePauseMenu()
 
     // Fade the whole overlay (dimmer + panel together) in rather than
     // popping it in instantly - reads much less jarring mid-gameplay.
-    auto* fx = new QGraphicsOpacityEffect(pauseMenuOverlay);
-    pauseMenuOverlay->setGraphicsEffect(fx);
-    fx->setOpacity(0.0);
+    // windowOpacity rather than QGraphicsOpacityEffect, since this is now
+    // a genuine top-level window (see PauseMenuDimmer comment above) and
+    // graphics effects on top-level widgets aren't reliably supported.
+    pauseMenuOverlay->setWindowOpacity(0.0);
 
-    auto* fadeIn = new QPropertyAnimation(fx, "opacity", pauseMenuOverlay);
+    auto* fadeIn = new QPropertyAnimation(pauseMenuOverlay, "windowOpacity", pauseMenuOverlay);
     fadeIn->setDuration(160);
     fadeIn->setStartValue(0.0);
     fadeIn->setEndValue(1.0);
@@ -2868,10 +2912,9 @@ void MainWindow::closePauseMenu()
                                 // cleanly instead of trying to fade an
                                 // overlay that's already on its way out
 
-    auto* fx = qobject_cast<QGraphicsOpacityEffect*>(overlay->graphicsEffect());
-    auto* fadeOut = new QPropertyAnimation(fx, "opacity", overlay);
+    auto* fadeOut = new QPropertyAnimation(overlay, "windowOpacity", overlay);
     fadeOut->setDuration(120);
-    fadeOut->setStartValue(fx ? fx->opacity() : 1.0);
+    fadeOut->setStartValue(overlay->windowOpacity());
     fadeOut->setEndValue(0.0);
     fadeOut->setEasingCurve(QEasingCurve::InCubic);
     connect(fadeOut, &QPropertyAnimation::finished, overlay, &QWidget::deleteLater);

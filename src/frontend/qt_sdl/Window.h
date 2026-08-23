@@ -107,6 +107,7 @@ protected:
     void focusOutEvent(QFocusEvent* event) override;
 
     void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     void changeEvent(QEvent* event) override;
 
 signals:
