@@ -63,6 +63,7 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
 
     addTile = new QToolButton(this);
     addTile->setObjectName("addGameTile");
+    addTile->setAttribute(Qt::WA_StyledBackground, true);
     addTile->setText("+");
     addTile->setFixedSize(140, 140);
     addTile->setToolButtonStyle(Qt::ToolButtonTextOnly);
@@ -373,6 +374,11 @@ void LibraryScreen::addGame(const QString& path)
 
     auto* tile = new QToolButton(this);
     tile->setObjectName("gameCard");
+    // Without this, QToolButton ignores the #gameCard background-color /
+    // border from the .qss entirely and just paints its default (no)
+    // background - which let the animated library background show
+    // straight through the tile instead of the card surface.
+    tile->setAttribute(Qt::WA_StyledBackground, true);
     tile->setText(displayName(path));
     tile->setFixedSize(140, 140);
     tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
