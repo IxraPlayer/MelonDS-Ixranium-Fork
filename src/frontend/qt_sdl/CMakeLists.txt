@@ -132,7 +132,7 @@ endif()
 target_link_libraries(melonDS PRIVATE net-utils)
 
 if (WIN32)
-    target_link_libraries(melonDS PUBLIC opengl32)
+    target_link_libraries(melonDS PUBLIC opengl32 ole32 shell32)
 
     target_sources(melonDS PRIVATE
         ../duckstation/gl/context_wgl.cpp

@@ -42,6 +42,9 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <windowsx.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <objbase.h>
 #endif
 #include <QHBoxLayout>
 #include <QLabel>
@@ -1560,12 +1563,20 @@ QString MainWindow::installGameToLibrary(const QStringList& file)
 QString MainWindow::detectDesktopPath()
 {
 #if defined(Q_OS_WIN)
-    QProcess proc;
-    proc.start("powershell", {"-NoProfile", "-Command", "[Environment]::GetFolderPath('Desktop')"});
-    proc.waitForFinished(3000);
-    QString path = QString::fromLocal8Bit(proc.readAllStandardOutput()).trimmed();
-    if (!path.isEmpty())
-        return path;
+    // SHGetKnownFolderPath resolves the *actual* current Desktop location
+    // straight from the registry/shell -- including when it's been moved
+    // or redirected (e.g. by OneDrive folder backup), which a hardcoded
+    // "%USERPROFILE%\Desktop" guess would miss. Also avoids spawning a
+    // powershell.exe process just to read one path, which could exceed
+    // the old 3s timeout on a slow first launch and silently fail.
+    PWSTR pathPtr = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &pathPtr)) && pathPtr)
+    {
+        QString path = QString::fromWCharArray(pathPtr);
+        CoTaskMemFree(pathPtr);
+        if (!path.isEmpty())
+            return path;
+    }
 #elif defined(Q_OS_MAC)
     QString path = QDir::homePath() + "/Desktop";
     if (QDir(path).exists())
@@ -1624,25 +1635,52 @@ void MainWindow::createDesktopShortcut(const QString& gameName, const QString& g
 #if defined(Q_OS_WIN)
     QString shortcutPath = QDir::toNativeSeparators(desktopDir.filePath(safeName + ".lnk"));
 
-    QString iconLocation = exePath + ",0";
+    QString iconLocation = exePath;
+    int iconIndex = 0;
     if (!iconImg.isNull())
     {
         QImage scaled = iconImg.scaled(256, 256, Qt::KeepAspectRatio, Qt::FastTransformation);
         QString icoPath = iconsDir.filePath(safeName + ".ico");
         if (scaled.save(icoPath, "ICO"))
-            iconLocation = QDir::toNativeSeparators(icoPath) + ",0";
+            iconLocation = QDir::toNativeSeparators(icoPath);
     }
 
-    QString script =
-        "$ws = New-Object -ComObject WScript.Shell; "
-        "$sc = $ws.CreateShortcut('" + shortcutPath.replace("'", "''") + "'); "
-        "$sc.TargetPath = '" + exePath.replace("'", "''") + "'; "
-        "$sc.Arguments = '\"" + nativeGamePath.replace("'", "''") + "\"'; "
-        "$sc.WorkingDirectory = '" + QDir::toNativeSeparators(QCoreApplication::applicationDirPath()).replace("'", "''") + "'; "
-        "$sc.IconLocation = '" + iconLocation.replace("'", "''") + "'; "
-        "$sc.Save()";
+    // Previously this shelled out to a PowerShell one-liner to build the
+    // .lnk via WScript.Shell. That was fragile in practice: manual
+    // single-quote escaping of paths could go wrong for names with quotes
+    // or backslash sequences, PowerShell's execution policy or AV/EDR
+    // software could silently block a script launched from another app,
+    // and QProcess::execute() blocked the UI thread waiting on a whole
+    // interpreter to spin up. Using the shell's native IShellLink/
+    // IPersistFile COM objects directly avoids all of that -- no
+    // subprocess, no quoting, no policy to trip over.
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool needUninit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
 
-    QProcess::execute("powershell", {"-NoProfile", "-WindowStyle", "Hidden", "-Command", script});
+    IShellLinkW* shellLink = nullptr;
+    hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                           IID_IShellLinkW, reinterpret_cast<void**>(&shellLink));
+    if (SUCCEEDED(hr) && shellLink)
+    {
+        shellLink->SetPath(reinterpret_cast<const wchar_t*>(exePath.utf16()));
+        shellLink->SetArguments(reinterpret_cast<const wchar_t*>(
+            (QString("\"") + nativeGamePath + "\"").utf16()));
+        shellLink->SetWorkingDirectory(reinterpret_cast<const wchar_t*>(
+            QDir::toNativeSeparators(QCoreApplication::applicationDirPath()).utf16()));
+        shellLink->SetIconLocation(reinterpret_cast<const wchar_t*>(iconLocation.utf16()), iconIndex);
+
+        IPersistFile* persistFile = nullptr;
+        hr = shellLink->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persistFile));
+        if (SUCCEEDED(hr) && persistFile)
+        {
+            persistFile->Save(reinterpret_cast<const wchar_t*>(shortcutPath.utf16()), TRUE);
+            persistFile->Release();
+        }
+        shellLink->Release();
+    }
+
+    if (needUninit)
+        CoUninitialize();
 
 #elif defined(Q_OS_MAC)
     // Plain .command scripts can't carry a custom icon on macOS - only a
