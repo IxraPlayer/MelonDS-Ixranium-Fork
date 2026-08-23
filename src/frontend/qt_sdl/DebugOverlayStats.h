@@ -99,18 +99,18 @@ private:
         if (!close) { free(line); return false; }
 
         long utime = 0, stime = 0;
-        // fields after "comm)" start at field 3 (state); utime/stime are
-        // the 11th/12th fields from there.
+        // fields after "comm)" start at field 3 (state); utime is the
+        // absolute field 14, stime is field 15 (per proc(5)).
         int field = 2;
         char* p = close + 1;
-        while (*p && field < 13)
+        while (*p && field < 15)
         {
             while (*p == ' ') p++;
             char* start = p;
             while (*p && *p != ' ') p++;
             field++;
-            if (field == 13) utime = atol(start);
-            else if (field == 14) { stime = atol(start); break; }
+            if (field == 14) utime = atol(start);
+            else if (field == 15) { stime = atol(start); break; }
         }
         free(line);
 
