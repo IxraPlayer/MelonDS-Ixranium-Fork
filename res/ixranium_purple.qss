@@ -134,6 +134,18 @@ QToolButton:pressed {
     border: 1px solid #e88fff;
     padding: 9px 7px 7px 9px;
 }
+QToolButton:disabled {
+    background-color: #1e1820;
+    color: #625668;
+    border: 1px solid #28212c;
+}
+
+QMenuBar::item:disabled {
+    background-color: #1e1820;
+    color: #625668;
+    border: 1px solid #28212c;
+}
+
 
 QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {
     background-color: #201924;

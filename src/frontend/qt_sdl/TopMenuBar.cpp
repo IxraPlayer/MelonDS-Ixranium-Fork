@@ -214,7 +214,7 @@ TopMenuBar::TopMenuBar(QWidget* parent) : QWidget(parent),
     // Extra top margin nudges the row down a bit within the taller bar
     // instead of sitting flush against the title bar above it. Extra
     // bottom margin leaves room for the glow line under the buttons.
-    layout->setContentsMargins(0, 8, 0, 6);
+    layout->setContentsMargins(0, 3, 0, 6);
     layout->setSpacing(6);
     layout->addStretch(1);
     // buttons get inserted before this trailing stretch by addMenuButton()
