@@ -2821,8 +2821,16 @@ void MainWindow::togglePauseMenu()
     });
     boxLayout->addWidget(btnSettings);
 
-    auto* btnQuit = new QPushButton(tr("Quit"), box);
-    connect(btnQuit, &QPushButton::clicked, this, &MainWindow::onQuit);
+    auto* btnQuit = new QPushButton(tr("Stop"), box);
+    connect(btnQuit, &QPushButton::clicked, this, [this]()
+    {
+        // Stops/unloads the current ROM (same as menu File > Stop) rather
+        // than exiting the whole emulator - closePauseMenu() first since
+        // onStop() will tear down emuThread state the overlay's Save/Load
+        // buttons still hold references into.
+        closePauseMenu();
+        onStop();
+    });
     boxLayout->addWidget(btnQuit);
 
     auto* boxRow = new QHBoxLayout();

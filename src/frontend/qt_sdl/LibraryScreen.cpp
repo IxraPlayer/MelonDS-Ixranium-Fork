@@ -9,6 +9,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
+#include <QRadialGradient>
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
@@ -44,8 +45,15 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    // Let the animated background paint straight through instead of
+    // sitting behind a separately-colored opaque rectangle - that's what
+    // was reading as a hard "frame" around the wave instead of a smooth
+    // blend into it.
+    scroll->setStyleSheet("QScrollArea { background: transparent; }");
+    scroll->viewport()->setStyleSheet("background: transparent;");
 
     auto* inner = new QWidget();
+    inner->setStyleSheet("background: transparent;");
     grid = new QGridLayout(inner);
     grid->setSpacing(18);
     grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
@@ -221,6 +229,17 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     grad.setColorAt(1.0, deep);
 
     painter.fillPath(path, grad);
+
+    // Vignette: darken toward the center so tiles/text stay readable
+    // against a busy animated background, while fading out to nothing
+    // near the edges - that fade is what makes the border blend smoothly
+    // into the center instead of reading as two separate flat panels
+    // stacked with a hard seam between them.
+    QRadialGradient vignette(r.center(), std::max(r.width(), r.height()) * 0.75);
+    vignette.setColorAt(0.0, QColor(6, 8, 12, 235));
+    vignette.setColorAt(0.55, QColor(6, 8, 12, 190));
+    vignette.setColorAt(1.0, QColor(6, 8, 12, 0));
+    painter.fillPath(path, vignette);
 
     QWidget::paintEvent(event);
 }
