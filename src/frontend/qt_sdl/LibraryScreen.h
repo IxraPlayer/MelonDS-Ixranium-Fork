@@ -35,6 +35,13 @@ public:
     // homebrew without a banner, etc) so the caller can fall back.
     static QString loadRomShortTitle(const QString& path);
 
+    static void ApplyAccentTheme(const QString& qssThemeName);
+
+    // Public so GameCardButton (a helper class defined alongside
+    // LibraryScreen in the .cpp) can read the currently selected accent
+    // hue without needing to be a friend class.
+    static int AccentHueShift;
+
 signals:
     void romActivated(QString path);
     void addGameRequested();

@@ -54,6 +54,7 @@
 #include "duckstation/gl/context.h"
 
 #include "main.h"
+#include "LibraryScreen.h"
 #include "version.h"
 
 #include "Config.h"
@@ -354,6 +355,8 @@ int main(int argc, char** argv)
         melon.setStyleSheet(styleStream.readAll());
         styleFile.close();
     }
+
+    LibraryScreen::ApplyAccentTheme(uiTheme);
 
     pathInit();
 

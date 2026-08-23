@@ -21,6 +21,7 @@
 #include <QTextStream>
 #include "InterfaceSettingsDialog.h"
 #include "ui_InterfaceSettingsDialog.h"
+#include "LibraryScreen.h"
 
 #include "types.h"
 #include "Platform.h"
@@ -184,6 +185,7 @@ void InterfaceSettingsDialog::done(int r)
         QString ixraniumColor = ui->cbxIxraniumColor->currentData().toString();
         QString qssThemeName = !ixraniumColor.isEmpty() ? ixraniumColor : ui->cbxQSSTheme->currentData().toString();
         cfg.SetQString("UIQSSTheme", qssThemeName);
+        LibraryScreen::ApplyAccentTheme(qssThemeName);
 
         QString langCode = ui->cbxUILanguage->currentData().toString();
         cfg.SetQString("Language", langCode);

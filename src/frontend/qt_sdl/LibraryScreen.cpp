@@ -29,6 +29,29 @@
 // press-and-drag reorder within the library grid.
 static const char* kGameDragMime = "application/x-melonds-game-path";
 
+// Rotates a color's hue by the given number of degrees, leaving near-gray
+// (low-saturation) colors like white/black untouched so text and glass
+// panels don't pick up a tint. This is how the single set of hand-tuned
+// turquoise/blue accent colors below gets re-painted as red/green/purple
+// for the other Ixranium color choices, without needing four separate
+// copies of every gradient.
+static QColor hueShifted(const QColor& c, int deltaDeg)
+{
+    if (deltaDeg == 0)
+        return c;
+
+    int h, s, l, a;
+    c.getHsl(&h, &s, &l, &a);
+    if (h < 0 || s == 0)
+        return c; // achromatic; nothing to rotate
+
+    h = ((h + deltaDeg) % 360 + 360) % 360;
+
+    QColor out;
+    out.setHsl(h, s, l, a);
+    return out;
+}
+
 // Custom-painted tile: fully bypasses QToolButton's own style-based
 // painting (which kept fighting the app's global .qss for the
 // background) in favor of drawing everything ourselves. This is what
@@ -78,7 +101,7 @@ protected:
         painter.fillPath(path, sheen);
 
         // Thin turquoise base border, always visible.
-        painter.strokePath(path, QPen(QColor(72, 226, 226, 100), 1.1));
+        painter.strokePath(path, QPen(hueShifted(QColor(72, 226, 226, 100), LibraryScreen::AccentHueShift), 1.1));
 
         // Bright white glow that slowly travels around the border, via a
         // conical gradient whose angle advances over time - cheap and
@@ -86,9 +109,9 @@ protected:
         double angleDeg = std::fmod(glowClock.elapsed() / 45.0, 360.0);
         QConicalGradient glow(r.center(), angleDeg);
         glow.setColorAt(0.00, QColor(255, 255, 255, 240));
-        glow.setColorAt(0.06, QColor(160, 240, 240, 70));
-        glow.setColorAt(0.50, QColor(90, 220, 220, 0));
-        glow.setColorAt(0.94, QColor(160, 240, 240, 70));
+        glow.setColorAt(0.06, hueShifted(QColor(160, 240, 240, 70), LibraryScreen::AccentHueShift));
+        glow.setColorAt(0.50, hueShifted(QColor(90, 220, 220, 0), LibraryScreen::AccentHueShift));
+        glow.setColorAt(0.94, hueShifted(QColor(160, 240, 240, 70), LibraryScreen::AccentHueShift));
         glow.setColorAt(1.00, QColor(255, 255, 255, 240));
         painter.strokePath(path, QPen(QBrush(glow), 1.5));
 
@@ -100,7 +123,7 @@ protected:
             f.setPixelSize(34);
             f.setWeight(QFont::Light);
             painter.setFont(f);
-            painter.setPen(underMouse() ? QColor(157, 123, 255) : QColor(90, 95, 110));
+            painter.setPen(underMouse() ? hueShifted(QColor(157, 123, 255), LibraryScreen::AccentHueShift) : QColor(90, 95, 110));
             painter.drawText(r, Qt::AlignCenter, "+");
             return;
         }
@@ -132,6 +155,26 @@ private:
 };
 
 using namespace melonDS;
+
+int LibraryScreen::AccentHueShift = 0;
+
+// Maps a saved "UIQSSTheme" name to the hue rotation (in degrees) that
+// turns the built-in turquoise/blue accent colors into the matching
+// Ixranium color. Deltas are measured from the panel-theme accent blue
+// (#3d5afe, hue ~223°) to each target hue used by the ixranium_*.qss
+// files (red 0°, green 130°, purple 280°) so the main screen and the
+// side-panel widgets always agree on which color is selected.
+void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
+{
+    if (qssThemeName == "ixranium_red")
+        AccentHueShift = 137;
+    else if (qssThemeName == "ixranium_green")
+        AccentHueShift = 267;
+    else if (qssThemeName == "ixranium_purple")
+        AccentHueShift = 57;
+    else
+        AccentHueShift = 0; // ixranium_blue, dark_glass, neo_modern, or unset
+}
 
 LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
 {
@@ -343,10 +386,11 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
         double cy = r.top()  + r.height() * (0.5 + b.ry * std::cos(bgPhase * b.speedY * twoPi + b.phaseY));
         double radius = r.width() * b.radius;
 
+        QColor color = hueShifted(b.color, AccentHueShift);
         QRadialGradient blob(QPointF(cx, cy), radius);
-        blob.setColorAt(0.0, b.color);
-        blob.setColorAt(0.6, QColor(b.color.red(), b.color.green(), b.color.blue(), b.color.alpha() / 2));
-        blob.setColorAt(1.0, QColor(b.color.red(), b.color.green(), b.color.blue(), 0));
+        blob.setColorAt(0.0, color);
+        blob.setColorAt(0.6, QColor(color.red(), color.green(), color.blue(), color.alpha() / 2));
+        blob.setColorAt(1.0, QColor(color.red(), color.green(), color.blue(), 0));
 
         painter.fillPath(path, blob);
     }
