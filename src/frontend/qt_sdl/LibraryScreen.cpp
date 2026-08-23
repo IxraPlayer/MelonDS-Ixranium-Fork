@@ -59,10 +59,12 @@ protected:
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
 
-        // ~35% translucent glass panel, slightly brighter on hover/press.
-        QColor bg = isDown()      ? QColor(30, 34, 42, 110)
-                  : underMouse()  ? QColor(26, 30, 38, 105)
-                                  : QColor(18, 20, 25, 89);
+        // ~25% translucent (darker than before, and clearly darker than
+        // the background behind it) glass panel, slightly brighter on
+        // hover/press.
+        QColor bg = isDown()      ? QColor(22, 25, 31, 150)
+                  : underMouse()  ? QColor(19, 22, 28, 145)
+                                  : QColor(10, 12, 16, 128);
         painter.fillPath(path, bg);
 
         // Qt/QSS has no real backdrop-blur (can't blur what's actually
@@ -316,7 +318,7 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // independently on their own lissajous-style paths, over a dark
     // turquoise base (no black in the mix) so hue never fully bottoms out
     // to a flat dark patch.
-    QColor deep(3, 15, 18);
+    QColor deep(2, 11, 13);
     painter.fillPath(path, deep);
 
     // Watercolor-style blend: more, softer, larger overlapping blobs with
@@ -325,11 +327,11 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // gives the "paint bleeding together" look instead of distinct blobs.
     struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
     static const Blob blobs[] = {
-        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 118, 118, 95) },   // turquoise
-        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(14, 49, 165, 100) },  // bright deep blue
-        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 105, 105, 80) },   // dark turquoise
-        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(25, 67, 172, 85) },   // deep blue accent
-        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 84, 91, 90) },     // dark turquoise, tighter
+        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 83, 83, 95) },     // turquoise
+        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(10, 34, 116, 100) }, // bright deep blue
+        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 74, 74, 80) },    // dark turquoise
+        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(18, 47, 120, 85) },  // deep blue accent
+        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 59, 64, 90) },    // dark turquoise, tighter
     };
 
     painter.setCompositionMode(QPainter::CompositionMode_Plus);
