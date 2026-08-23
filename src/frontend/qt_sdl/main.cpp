@@ -40,6 +40,7 @@
 #include <QLocale>
 #include <QFile>
 #include <QFileInfo>
+#include <QDirIterator>
 #include <functional>
 #include <QTextStream>
 #ifndef _WIN32
@@ -388,8 +389,34 @@ int main(int argc, char** argv)
         langCode = configLang;
 
     QTranslator translator;
-    if (translator.load(":/translations/melonDS_" + langCode + ".qm"))
+    bool translatorLoaded = translator.load(":/translations/melonDS_" + langCode + ".qm");
+    if (translatorLoaded)
         melon.installTranslator(&translator);
+    else
+        // If you're seeing this while langCode is "tr" (or your expected
+        // language), the .qm was never embedded into the binary -- almost
+        // always because Qt6 LinguistTools (lrelease) wasn't found when
+        // CMake configured (see the WARNING message CMake prints in that
+        // case) so qt6_add_translations() had nothing to compile. Re-run
+        // CMake configure after installing it, then do a full rebuild.
+        printf("Translation not loaded: :/translations/melonDS_%s.qm (langCode=\"%s\")\n",
+               langCode.toStdString().c_str(), langCode.toStdString().c_str());
+
+    {
+        // Extra diagnostic: list whatever *is* embedded under the
+        // translations resource prefix, so it's obvious from the console
+        // whether melonDS_tr.qm made it into the build at all.
+        QDirIterator it(":/translations", QDirIterator::Subdirectories);
+        printf("Embedded translation files:\n");
+        bool any = false;
+        while (it.hasNext())
+        {
+            printf("  %s\n", it.next().toStdString().c_str());
+            any = true;
+        }
+        if (!any)
+            printf("  (none -- LinguistTools likely wasn't found at CMake configure time)\n");
+    }
 
     QString uiTheme = Config::GetGlobalTable().GetQString("UIQSSTheme");
     if (uiTheme != "dark_glass" && uiTheme != "neo_modern" &&

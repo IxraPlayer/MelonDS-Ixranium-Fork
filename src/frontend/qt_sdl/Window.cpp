@@ -38,6 +38,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QVBoxLayout>
+#include <QSet>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -1018,11 +1019,33 @@ void MainWindow::createScreenPanel()
         connect(library, &LibraryScreen::libraryChanged, this, &MainWindow::saveLibraryToConfig);
 
         Config::Array libROMs = globalCfg.GetArray("UILibrary");
+        QSet<QString> known;
         for (int i = 0; i < (int)libROMs.Size(); i++)
         {
             std::string item = libROMs.GetString(i);
             if (!item.empty())
+            {
                 library->addGame(QString::fromStdString(item));
+                known.insert(QString::fromStdString(item));
+            }
+        }
+
+        // The "games" folder is where installGameToLibrary() copies ROMs
+        // to, but until now the home screen only ever showed whatever was
+        // already listed in the saved UILibrary array -- files sitting in
+        // that folder without a matching config entry (e.g. copied there
+        // by hand, or left over from before) were invisible. Pick up
+        // anything in there that isn't already known so it actually shows.
+        QString gamesDirPath = QString::fromStdString(Platform::GetLocalFilePath("games"));
+        QDir gamesDir(gamesDirPath);
+        if (gamesDir.exists())
+        {
+            QStringList filters = {"*.nds", "*.dsi", "*.srl", "*.ids"};
+            for (const QFileInfo& fi : gamesDir.entryInfoList(filters, QDir::Files))
+            {
+                if (!known.contains(fi.absoluteFilePath()))
+                    library->addGame(fi.absoluteFilePath());
+            }
         }
 
         setCentralWidget(centralStack);
