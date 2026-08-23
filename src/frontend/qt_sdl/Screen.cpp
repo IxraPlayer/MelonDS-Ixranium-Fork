@@ -356,6 +356,13 @@ void ScreenPanel::updateDebugOverlayText()
 
     debugOverlayLabel->setText(lines.join("\n"));
     debugOverlayLabel->adjustSize();
+    // The label sits on top of a continuously-repainting (GL) surface, so
+    // just changing its text isn't enough to guarantee it stays visible
+    // above the game frame -- previously only toggling the overlay
+    // on/off explicitly raised+repainted it, which is why the numbers
+    // looked frozen except right after a toggle. Do that every tick too.
+    debugOverlayLabel->raise();
+    debugOverlayLabel->update();
 }
 
 void ScreenPanel::mousePressEvent(QMouseEvent* event)

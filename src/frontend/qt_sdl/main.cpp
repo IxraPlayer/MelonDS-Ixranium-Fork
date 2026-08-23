@@ -39,6 +39,8 @@
 #include <QTranslator>
 #include <QLocale>
 #include <QFile>
+#include <QFileInfo>
+#include <functional>
 #include <QTextStream>
 #ifndef _WIN32
 #include <QGuiApplication>
@@ -211,6 +213,40 @@ void pathInit()
 #else
         QString confdir;
         QDir config(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation));
+
+        // A now-reverted build briefly used "MelonDS - Ixranium Fork" as
+        // this folder's name instead of "melonDS". Anyone who ran that
+        // build had their config/library/save data written there instead
+        // of the real folder. If that mistaken folder exists and the real
+        // one hasn't been used yet (or is missing config entirely), fold
+        // its contents into the real folder once so nothing is stranded.
+        QDir mistakenDir(config.absolutePath() + QDir::separator() + "MelonDS - Ixranium Fork");
+        QDir correctDir(config.absolutePath() + QDir::separator() + "melonDS");
+        if (mistakenDir.exists() &&
+            (!correctDir.exists() || !QFile::exists(correctDir.filePath("melonDS.toml"))))
+        {
+            if (!correctDir.exists())
+                config.mkdir("melonDS");
+
+            std::function<void(const QDir&, const QDir&)> mergeDir = [&](const QDir& from, const QDir& to)
+            {
+                for (const QFileInfo& entry : from.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries))
+                {
+                    QString destPath = to.filePath(entry.fileName());
+                    if (entry.isDir())
+                    {
+                        QDir(destPath).mkpath(".");
+                        mergeDir(QDir(entry.absoluteFilePath()), QDir(destPath));
+                    }
+                    else if (!QFile::exists(destPath))
+                    {
+                        QFile::copy(entry.absoluteFilePath(), destPath);
+                    }
+                }
+            };
+            mergeDir(mistakenDir, correctDir);
+        }
+
         config.mkdir("melonDS");
         confdir = config.absolutePath() + QDir::separator() + "melonDS";
         emuDirectory = confdir;

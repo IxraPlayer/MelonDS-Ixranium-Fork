@@ -957,6 +957,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
 void MainWindow::createScreenPanel()
 {
     auto oldpanel = panel;
+    // The debug overlay's visibility (and its refresh timer) lives on the
+    // ScreenPanel instance itself. Recreating the panel (e.g. switching
+    // renderers) previously dropped that state silently -- the overlay
+    // just stopped updating until manually toggled off/on again.
+    bool hadDebugOverlay = oldpanel && oldpanel->debugOverlayVisible();
     panel = nullptr;
     if (oldpanel) delete oldpanel;
 
@@ -998,6 +1003,10 @@ void MainWindow::createScreenPanel()
         panel = panelNative;
         panel->show();
     }
+
+    if (hadDebugOverlay)
+        panel->setDebugOverlayVisible(true);
+
     if (!centralStack)
     {
         centralStack = new QStackedWidget(this);

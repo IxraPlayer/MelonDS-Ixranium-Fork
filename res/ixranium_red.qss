@@ -205,6 +205,27 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {
     border: 1px solid #fe573d;
 }
 
+/* Disabled state for form controls -- previously only QPushButton had a
+   :disabled rule, so checkboxes, radio buttons, combo/spin/line edits and
+   plain disabled labels all still rendered at full brightness with no way
+   to tell they weren't interactive. */
+QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled, QGroupBox:disabled {
+    color: #201818;
+}
+
+QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {
+    background-color: #201818;
+    border: 1px solid #2c2121;
+}
+
+QComboBox:disabled, QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
+QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background-color: #201818;
+    border: 1px solid #2c2121;
+    color: #201818;
+}
+
+
 QSlider::groove:horizontal {
     height: 6px;
     background: #2f2323;
