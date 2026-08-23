@@ -67,7 +67,7 @@ QMenu::item:selected {
 }
 
 QMenu::item:disabled {
-    color: #181a20;
+    color: #101116;
     background-color: transparent;
 }
 
@@ -100,9 +100,9 @@ QPushButton:pressed {
 }
 
 QPushButton:disabled {
-    background-color: #181a20;
-    color: #565b68;
-    border: 1px solid #21242c;
+    background-color: #101116;
+    color: #9298a6;
+    border: 1px solid transparent;
 }
 
 QPushButton#primaryButton {
@@ -140,15 +140,15 @@ QToolButton:pressed {
     padding: 9px 7px 7px 9px;
 }
 QToolButton:disabled {
-    background-color: #181a20;
-    color: #565b68;
-    border: 1px solid #21242c;
+    background-color: #101116;
+    color: #9298a6;
+    border: 1px solid transparent;
 }
 
 QMenuBar::item:disabled {
-    background-color: #181a20;
-    color: #565b68;
-    border: 1px solid #21242c;
+    background-color: #101116;
+    color: #9298a6;
+    border: 1px solid transparent;
 }
 
 
@@ -215,19 +215,19 @@ QCheckBox::indicator:checked, QRadioButton::indicator:checked {
    plain disabled labels all still rendered at full brightness with no way
    to tell they weren't interactive. */
 QCheckBox:disabled, QRadioButton:disabled, QLabel:disabled, QGroupBox:disabled {
-    color: #181a20;
+    color: #101116;
 }
 
 QCheckBox::indicator:disabled, QRadioButton::indicator:disabled {
-    background-color: #181a20;
-    border: 1px solid #21242c;
+    background-color: #101116;
+    border: 1px solid transparent;
 }
 
 QComboBox:disabled, QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled,
 QSpinBox:disabled, QDoubleSpinBox:disabled {
-    background-color: #181a20;
-    border: 1px solid #21242c;
-    color: #181a20;
+    background-color: #101116;
+    border: 1px solid transparent;
+    color: #101116;
 }
 
 
@@ -525,9 +525,9 @@ QProgressBar::chunk {
 }
 
 #topMenuButton:disabled {
-    background-color: #181a20;
-    color: #565b68;
-    border: 1px solid #21242c;
+    background-color: #101116;
+    color: #9298a6;
+    border: 1px solid transparent;
 }
 
 #topMenuButton::menu-indicator {
