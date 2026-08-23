@@ -36,6 +36,10 @@
 #include <QInputDialog>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPushButton>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QPainterPath>
 #include <QRegion>
 #include <QTimer>
@@ -1078,6 +1082,12 @@ void MainWindow::drawScreen()
 void MainWindow::keyPressEvent(QKeyEvent* event)
 {
     if (event->isAutoRepeat()) return;
+
+    if (event->key() == Qt::Key_Escape && emuInstance->emuIsActive())
+    {
+        togglePauseMenu();
+        return;
+    }
 
     // TODO!! REMOVE ME IN RELEASE BUILDS!!
     //if (event->key() == Qt::Key_F11) emuInstance->getNDS()->debug(0);
@@ -2705,6 +2715,7 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (resizeGrips) resizeGrips->updateGeometry();
     updateFramelessWindowMask(this);
     positionTopMenuRestoreBtn();
+    if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(rect());
 }
 
 void MainWindow::positionTopMenuRestoreBtn()
@@ -2717,6 +2728,117 @@ void MainWindow::positionTopMenuRestoreBtn()
     int titleBarH = titleBar ? titleBar->height() : 34;
     int margin = 8;
     topMenuRestoreBtn->move(width() - topMenuRestoreBtn->width() - margin, titleBarH + margin);
+}
+
+namespace
+{
+    // Full-window dimmer behind the pause menu buttons. Just a flat
+    // translucent black rect - keeps this independent of whichever theme
+    // (dark_glass / neo_modern) is active rather than trying to match it.
+    class PauseMenuDimmer : public QWidget
+    {
+    public:
+        explicit PauseMenuDimmer(QWidget* parent) : QWidget(parent) {}
+
+    protected:
+        void paintEvent(QPaintEvent*) override
+        {
+            QPainter p(this);
+            p.fillRect(rect(), QColor(0, 0, 0, 165));
+        }
+    };
+}
+
+void MainWindow::togglePauseMenu()
+{
+    if (pauseMenuOverlay)
+    {
+        closePauseMenu();
+        return;
+    }
+
+    emuThread->emuPause();
+
+    pauseMenuOverlay = new PauseMenuDimmer(this);
+    pauseMenuOverlay->setGeometry(rect());
+
+    auto* outer = new QVBoxLayout(pauseMenuOverlay);
+    outer->addStretch();
+
+    auto* box = new QWidget(pauseMenuOverlay);
+    box->setFixedWidth(240);
+    box->setStyleSheet(
+        "QWidget { background: rgba(30,32,40,235); border-radius: 10px; }"
+        "QPushButton { color: white; background: rgba(255,255,255,20); "
+        "  border: none; border-radius: 6px; padding: 10px; font-size: 13px; }"
+        "QPushButton:hover { background: rgba(255,255,255,45); }"
+        "QPushButton:disabled { color: rgba(255,255,255,90); }");
+    auto* boxLayout = new QVBoxLayout(box);
+    boxLayout->setSpacing(8);
+    boxLayout->setContentsMargins(18, 18, 18, 18);
+
+    auto* title = new QLabel(tr("Paused"), box);
+    title->setAlignment(Qt::AlignCenter);
+    title->setStyleSheet("QLabel { color: white; font-size: 15px; font-weight: bold; "
+                          "background: transparent; padding-bottom: 6px; }");
+    boxLayout->addWidget(title);
+
+    auto* btnResume = new QPushButton(tr("Resume"), box);
+    connect(btnResume, &QPushButton::clicked, this, &MainWindow::closePauseMenu);
+    boxLayout->addWidget(btnResume);
+
+    // Quick-slot 1, same as the F1/Shift+F1 shortcuts - the pause menu
+    // is meant to be a fast, no-submenu path, not a full save-state
+    // manager (that's still in the regular menu for picking slots).
+    auto* btnSave = new QPushButton(tr("Save State (slot 1)"), box);
+    connect(btnSave, &QPushButton::clicked, this, [this]()
+    {
+        actSaveState[1]->trigger();
+        closePauseMenu();
+    });
+    boxLayout->addWidget(btnSave);
+
+    auto* btnLoad = new QPushButton(tr("Load State (slot 1)"), box);
+    btnLoad->setEnabled(actLoadState[1]->isEnabled());
+    connect(btnLoad, &QPushButton::clicked, this, [this]()
+    {
+        actLoadState[1]->trigger();
+        closePauseMenu();
+    });
+    boxLayout->addWidget(btnLoad);
+
+    auto* btnSettings = new QPushButton(tr("Settings"), box);
+    connect(btnSettings, &QPushButton::clicked, this, [this]()
+    {
+        closePauseMenu();
+        onOpenSettingsHub();
+    });
+    boxLayout->addWidget(btnSettings);
+
+    auto* btnQuit = new QPushButton(tr("Quit"), box);
+    connect(btnQuit, &QPushButton::clicked, this, &MainWindow::onQuit);
+    boxLayout->addWidget(btnQuit);
+
+    auto* boxRow = new QHBoxLayout();
+    boxRow->addStretch();
+    boxRow->addWidget(box);
+    boxRow->addStretch();
+    outer->addLayout(boxRow);
+    outer->addStretch();
+
+    pauseMenuOverlay->show();
+    pauseMenuOverlay->raise();
+    btnResume->setFocus();
+}
+
+void MainWindow::closePauseMenu()
+{
+    if (!pauseMenuOverlay) return;
+
+    pauseMenuOverlay->deleteLater();
+    pauseMenuOverlay = nullptr;
+
+    emuThread->emuUnpause();
 }
 
 void MainWindow::changeEvent(QEvent* event)

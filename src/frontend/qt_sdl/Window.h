@@ -254,6 +254,15 @@ public:
     // collapseClicked() / onTopMenuCollapseClicked() below).
     QToolButton* topMenuRestoreBtn = nullptr;
     void positionTopMenuRestoreBtn();
+
+    // ESC pause menu: a simple full-window overlay (Resume/Save
+    // state/Load state/Settings/Quit) toggled by the Escape key while a
+    // ROM is running. Built on demand in togglePauseMenu() rather than a
+    // separate widget file - it's just a handful of buttons on a dimmed
+    // background.
+    QWidget* pauseMenuOverlay = nullptr;
+    void togglePauseMenu();
+    void closePauseMenu();
     QStackedWidget* centralStack = nullptr;
     LibraryScreen* library = nullptr;
     bool showingLibrary = true;
