@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=melonDS
+Name=MelonDS - Ixranium Fork
 GenericName=Nintendo DS Emulator
 Comment=A fast and accurate Nintendo DS emulator.
 Exec=melonDS %f

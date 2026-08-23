@@ -211,8 +211,8 @@ void pathInit()
 #else
         QString confdir;
         QDir config(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation));
-        config.mkdir("melonDS");
-        confdir = config.absolutePath() + QDir::separator() + "melonDS";
+        config.mkdir("MelonDS - Ixranium Fork");
+        confdir = config.absolutePath() + QDir::separator() + "MelonDS - Ixranium Fork";
         emuDirectory = confdir;
 #endif
     }
@@ -324,7 +324,7 @@ int main(int argc, char** argv)
     std::signal(SIGTERM, signalHandler);
 #endif
 
-    printf("melonDS " MELONDS_VERSION "\n");
+    printf("MelonDS - Ixranium Fork " MELONDS_VERSION "\n");
     printf(MELONDS_URL "\n");
 
     // easter egg - not worth checking other cases for something so dumb
@@ -365,7 +365,7 @@ int main(int argc, char** argv)
     // http://stackoverflow.com/questions/14543333/joystick-wont-work-using-sdl
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
 
-    SDL_SetHint(SDL_HINT_APP_NAME, "melonDS");
+    SDL_SetHint(SDL_HINT_APP_NAME, "MelonDS - Ixranium Fork");
 
     if (SDL_Init(SDL_INIT_HAPTIC) < 0)
     {
@@ -385,7 +385,7 @@ int main(int argc, char** argv)
         QString errorStr = "Failed to initialize SDL. This could indicate an issue with your audio driver.\n\nThe error was: ";
         errorStr += err;
 
-        QMessageBox::critical(nullptr, "melonDS", errorStr);
+        QMessageBox::critical(nullptr, "MelonDS - Ixranium Fork", errorStr);
         return 1;
     }
 
@@ -396,8 +396,8 @@ int main(int argc, char** argv)
 
     if (!Config::Load())
         QMessageBox::critical(nullptr,
-                              "melonDS",
-                              "Unable to write to config.\nPlease check the write permissions of the folder you placed melonDS in.");
+                              "MelonDS - Ixranium Fork",
+                              "Unable to write to config.\nPlease check the write permissions of the folder you placed MelonDS - Ixranium Fork in.");
 
     camStarted[0] = false;
     camStarted[1] = false;

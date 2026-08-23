@@ -182,7 +182,7 @@ void EmuSettingsDialog::verifyFirmware()
     // data in the same area. it has the same problem on hardware.
     //
     // but this should help stop users from reporting that issue over and over
-    // again, when the issue is not from melonDS but from their firmware dump.
+    // again, when the issue is not from MelonDS - Ixranium Fork but from their firmware dump.
     //
     // I don't know about all the firmware hacks in existence, but the one I
     // looked at has 0x180 bytes from the header repeated at 0x3FC80, but
@@ -209,7 +209,7 @@ void EmuSettingsDialog::verifyFirmware()
                       "Problematic firmware dump",
                       "You are using an old hacked firmware dump.\n"
                       "Firmware boot will stop working if you run any game that alters WFC settings.\n\n"
-                      "Note that the issue is not from melonDS, it would also happen on an actual DS.");
+                      "Note that the issue is not from MelonDS - Ixranium Fork, it would also happen on an actual DS.");
     }
 }
 
@@ -355,7 +355,7 @@ void EmuSettingsDialog::on_btnFirmwareBrowse_clicked()
 
     if (!Platform::CheckFileWritable(file.toStdString()))
     {
-        QMessageBox::critical(this, "melonDS", "Unable to write to firmware file.\nPlease check file/folder write permissions.");
+        QMessageBox::critical(this, "MelonDS - Ixranium Fork", "Unable to write to firmware file.\nPlease check file/folder write permissions.");
         return;
     }
 
@@ -417,7 +417,7 @@ void EmuSettingsDialog::on_btnDLDISDBrowse_clicked()
 
     if (!Platform::CheckFileWritable(file.toStdString()))
     {
-        QMessageBox::critical(this, "melonDS", "Unable to write to DLDI SD image.\nPlease check file/folder write permissions.");
+        QMessageBox::critical(this, "MelonDS - Ixranium Fork", "Unable to write to DLDI SD image.\nPlease check file/folder write permissions.");
         return;
     }
 
@@ -455,7 +455,7 @@ void EmuSettingsDialog::on_btnDSiFirmwareBrowse_clicked()
 
     if (!Platform::CheckFileWritable(file.toStdString()))
     {
-        QMessageBox::critical(this, "melonDS", "Unable to write to DSi firmware file.\nPlease check file/folder write permissions.");
+        QMessageBox::critical(this, "MelonDS - Ixranium Fork", "Unable to write to DSi firmware file.\nPlease check file/folder write permissions.");
         return;
     }
 
@@ -476,7 +476,7 @@ void EmuSettingsDialog::on_btnDSiNANDBrowse_clicked()
 
     if (!Platform::CheckFileWritable(file.toStdString()))
     {
-        QMessageBox::critical(this, "melonDS", "Unable to write to DSi NAND image.\nPlease check file/folder write permissions.");
+        QMessageBox::critical(this, "MelonDS - Ixranium Fork", "Unable to write to DSi NAND image.\nPlease check file/folder write permissions.");
         return;
     }
 
@@ -511,7 +511,7 @@ void EmuSettingsDialog::on_btnDSiSDBrowse_clicked()
 
     if (!Platform::CheckFileWritable(file.toStdString()))
     {
-        QMessageBox::critical(this, "melonDS", "Unable to write to DSi SD image.\nPlease check file/folder write permissions.");
+        QMessageBox::critical(this, "MelonDS - Ixranium Fork", "Unable to write to DSi SD image.\nPlease check file/folder write permissions.");
         return;
     }
 

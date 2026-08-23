@@ -17,7 +17,7 @@
    </sizepolicy>
   </property>
   <property name="windowTitle">
-   <string>Interface settings - melonDS</string>
+   <string>Interface settings - MelonDS - Ixranium Fork</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0">
    <property name="sizeConstraint">
@@ -83,7 +83,7 @@
       <item>
        <widget class="QLabel" name="lblLanguageNote">
         <property name="text">
-         <string>Restart melonDS to apply the new language.</string>
+         <string>Restart MelonDS - Ixranium Fork to apply the new language.</string>
         </property>
         <property name="styleSheet">
          <string notr="true">color: #d8a400; font-style: italic;</string>

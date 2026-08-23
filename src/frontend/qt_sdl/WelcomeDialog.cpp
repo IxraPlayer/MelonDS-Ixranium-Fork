@@ -29,7 +29,7 @@
 
 WelcomeDialog::WelcomeDialog(QWidget* parent) : QDialog(parent)
 {
-    setWindowTitle(tr("Welcome to melonDS"));
+    setWindowTitle(tr("Welcome to MelonDS - Ixranium Fork"));
     setModal(true);
     setMinimumWidth(380);
 
