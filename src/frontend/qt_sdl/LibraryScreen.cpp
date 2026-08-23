@@ -361,7 +361,7 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // independently on their own lissajous-style paths, over a dark
     // turquoise base (no black in the mix) so hue never fully bottoms out
     // to a flat dark patch.
-    QColor deep(2, 11, 13);
+    QColor deep = hueShifted(QColor(2, 11, 13), AccentHueShift);
     painter.fillPath(path, deep);
 
     // Watercolor-style blend: more, softer, larger overlapping blobs with
