@@ -483,7 +483,7 @@ QProgressBar::chunk {
     font-weight: 600;
     font-size: 13px;
     color: #c2b7c8;
-    padding: 4px 4px 4px 4px;
+    padding: 2px 4px 3px 4px;
 }
 
 #topMenuButton:hover {
@@ -496,6 +496,12 @@ QProgressBar::chunk {
     background-color: #36263c;
     border: 1px solid #df6cff;
     padding: 7px 4px 3px 4px;
+}
+
+#topMenuButton:disabled {
+    background-color: #1e1820;
+    color: #625668;
+    border: 1px solid #28212c;
 }
 
 #topMenuButton::menu-indicator {

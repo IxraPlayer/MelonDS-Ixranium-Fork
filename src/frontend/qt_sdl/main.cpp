@@ -211,8 +211,8 @@ void pathInit()
 #else
         QString confdir;
         QDir config(QStandardPaths::writableLocation(QStandardPaths::ConfigLocation));
-        config.mkdir("MelonDS - Ixranium Fork");
-        confdir = config.absolutePath() + QDir::separator() + "MelonDS - Ixranium Fork";
+        config.mkdir("melonDS");
+        confdir = config.absolutePath() + QDir::separator() + "melonDS";
         emuDirectory = confdir;
 #endif
     }
@@ -333,6 +333,19 @@ int main(int argc, char** argv)
 
     MelonApplication melon(argc, argv);
 
+    // pathInit() resolves the config directory, and Config::Load() has to
+    // run before anything reads a saved setting -- both used to happen
+    // much further down (after language/theme were already read), so
+    // every GetQString() below was hitting a still-empty in-memory config
+    // and silently falling back to the default every single launch. That's
+    // why a chosen language or theme never seemed to "stick": it really
+    // was being saved, just never loaded back in time to be read here.
+    pathInit();
+    if (!Config::Load())
+        QMessageBox::critical(nullptr,
+                              "MelonDS - Ixranium Fork",
+                              "Unable to write to config.\nPlease check the write permissions of the folder you placed MelonDS - Ixranium Fork in.");
+
     QString langCode = QLocale::system().name().section('_', 0, 0);
     QString configLang = Config::GetGlobalTable().GetQString("Language");
     if (!configLang.isEmpty())
@@ -357,8 +370,6 @@ int main(int argc, char** argv)
     }
 
     LibraryScreen::ApplyAccentTheme(uiTheme);
-
-    pathInit();
 
     CLI::CommandLineOptions* options = CLI::ManageArgs(melon);
 
@@ -393,11 +404,6 @@ int main(int argc, char** argv)
 
     SDL_InitSubSystem(SDL_INIT_VIDEO);
     SDL_EnableScreenSaver(); SDL_DisableScreenSaver();
-
-    if (!Config::Load())
-        QMessageBox::critical(nullptr,
-                              "MelonDS - Ixranium Fork",
-                              "Unable to write to config.\nPlease check the write permissions of the folder you placed MelonDS - Ixranium Fork in.");
 
     camStarted[0] = false;
     camStarted[1] = false;

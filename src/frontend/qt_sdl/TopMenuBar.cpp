@@ -89,17 +89,47 @@ static QIcon makeMenuIcon(const QString& key, const QColor& color, int size)
     }
     else if (key == "config")
     {
+        // A proper gear: a ring with blocky teeth around it and a hollow
+        // center, instead of the previous thin center-dot-plus-spokes
+        // shape (which read more like a starburst/asterisk than a gear).
         const QPointF center(s * 0.5, s * 0.5);
-        const qreal outerR = s * 0.34;
-        const qreal innerR = s * 0.16;
-        p.drawEllipse(center, innerR, innerR);
-        for (int i = 0; i < 6; i++)
+        const qreal bodyR = s * 0.26;
+        const qreal toothOuterR = s * 0.38;
+        const qreal toothHalfWidth = s * 0.075;
+        const qreal holeR = s * 0.12;
+
+        p.setBrush(QBrush(color));
+        p.setPen(Qt::NoPen);
+
+        QPainterPath gearPath;
+        gearPath.addEllipse(center, bodyR, bodyR);
+
+        const int toothCount = 8;
+        for (int i = 0; i < toothCount; i++)
         {
-            qreal angle = i * (M_PI / 3.0);
-            QPointF from(center.x() + std::cos(angle) * innerR, center.y() + std::sin(angle) * innerR);
-            QPointF to(center.x() + std::cos(angle) * outerR, center.y() + std::sin(angle) * outerR);
-            p.drawLine(from, to);
+            qreal angle = i * (2.0 * M_PI / toothCount);
+            QPointF dir(std::cos(angle), std::sin(angle));
+            QPointF perp(-dir.y(), dir.x());
+
+            QPointF base1 = center + dir * (bodyR * 0.85) + perp * toothHalfWidth;
+            QPointF base2 = center + dir * (bodyR * 0.85) - perp * toothHalfWidth;
+            QPointF tip1  = center + dir * toothOuterR + perp * toothHalfWidth;
+            QPointF tip2  = center + dir * toothOuterR - perp * toothHalfWidth;
+
+            QPainterPath tooth;
+            tooth.moveTo(base1);
+            tooth.lineTo(tip1);
+            tooth.lineTo(tip2);
+            tooth.lineTo(base2);
+            tooth.closeSubpath();
+            gearPath = gearPath.united(tooth);
         }
+
+        QPainterPath hole;
+        hole.addEllipse(center, holeR, holeR);
+        gearPath = gearPath.subtracted(hole);
+
+        p.drawPath(gearPath);
     }
     else if (key == "help")
     {
@@ -150,7 +180,12 @@ TopMenuButton::TopMenuButton(const QString& text, QWidget* parent) : QToolButton
     setFocusPolicy(Qt::NoFocus);
     setCursor(Qt::PointingHandCursor);
     setFixedWidth(m_baseWidth);
-    setFixedHeight(54);
+    // 54px wasn't quite enough room for icon + text together -- letters
+    // with descenders (the "g" in "Config") were getting clipped against
+    // the bottom edge. A little extra height (kept within the bar's own
+    // 64px + reduced margins budget) plus tighter QSS padding gives the
+    // text baseline the room it needs.
+    setFixedHeight(55);
 }
 
 void TopMenuButton::enterEvent(MenuBtnEnterEvent* event)
