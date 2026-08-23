@@ -316,7 +316,7 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // independently on their own lissajous-style paths, over a dark
     // turquoise base (no black in the mix) so hue never fully bottoms out
     // to a flat dark patch.
-    QColor deep(4, 22, 26);
+    QColor deep(3, 15, 18);
     painter.fillPath(path, deep);
 
     // Watercolor-style blend: more, softer, larger overlapping blobs with
@@ -325,11 +325,11 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // gives the "paint bleeding together" look instead of distinct blobs.
     struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
     static const Blob blobs[] = {
-        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 168, 168, 95) },   // turquoise
-        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(20, 70, 235, 100) },  // bright deep blue
-        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 150, 150, 80) },   // dark turquoise
-        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(35, 95, 245, 85) },   // deep blue accent
-        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 120, 130, 90) },   // dark turquoise, tighter
+        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 118, 118, 95) },   // turquoise
+        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(14, 49, 165, 100) },  // bright deep blue
+        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 105, 105, 80) },   // dark turquoise
+        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(25, 67, 172, 85) },   // deep blue accent
+        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 84, 91, 90) },     // dark turquoise, tighter
     };
 
     painter.setCompositionMode(QPainter::CompositionMode_Plus);
