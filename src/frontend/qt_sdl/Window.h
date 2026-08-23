@@ -109,6 +109,15 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
     void changeEvent(QEvent* event) override;
+#ifdef Q_OS_WIN
+    // On Windows, a Qt::FramelessWindowHint window that gets maximized via
+    // the OS (snap, taskbar, our own restore/maximize button) still has
+    // Windows' invisible resize-border margins applied to it. Since there's
+    // no native frame to absorb them, they show up as extra empty space
+    // along the top (and sides) of the window instead. Intercepting
+    // WM_NCCALCSIZE lets us cancel that margin out while maximized.
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+#endif
 
 signals:
     void screenLayoutChange();

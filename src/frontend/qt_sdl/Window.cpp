@@ -38,6 +38,11 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QVBoxLayout>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <windowsx.h>
+#endif
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QGraphicsOpacityEffect>
@@ -2528,6 +2533,13 @@ void MainWindow::onInterfaceSettingsFinished(int res)
 void MainWindow::onChangeScreenSize()
 {
     int factor = ((QAction*)sender())->data().toInt();
+    // If the window is maximized, resize() below is a no-op (Qt ignores
+    // resizes on a maximized window), so the requested 1x/2x/3x/4x size
+    // never actually applies -- the panel just keeps stretching to fill
+    // the maximized window instead of the window returning to the
+    // requested size. Leave maximized mode first so the resize sticks.
+    if (isMaximized())
+        showNormal();
     QSize diff = size() - panel->size();
     resize(panel->screenGetMinSize(factor) + diff);
 }
@@ -2727,6 +2739,35 @@ void MainWindow::moveEvent(QMoveEvent* event)
     QMainWindow::moveEvent(event);
     if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
 }
+
+#ifdef Q_OS_WIN
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    MSG* msg = static_cast<MSG*>(message);
+    if (msg->message == WM_NCCALCSIZE && msg->wParam == TRUE && isMaximized())
+    {
+        // Default handling insets the client rect by Windows' invisible
+        // resize-border margins, which (with no native frame to hide them
+        // in) show up as real empty space along the top/sides once
+        // maximized. Recompute the client rect from the monitor's work
+        // area instead so it fills it exactly, with no leftover gap.
+        HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+        if (monitor)
+        {
+            MONITORINFO info;
+            info.cbSize = sizeof(MONITORINFO);
+            if (GetMonitorInfoW(monitor, &info))
+            {
+                NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+                params->rgrc[0] = info.rcWork;
+                *result = 0;
+                return true;
+            }
+        }
+    }
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif
 
 void MainWindow::positionTopMenuRestoreBtn()
 {
