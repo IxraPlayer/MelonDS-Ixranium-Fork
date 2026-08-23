@@ -59,10 +59,10 @@ protected:
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
 
-        // ~50% translucent glass panel, slightly brighter on hover/press.
-        QColor bg = isDown()      ? QColor(30, 34, 42, 150)
-                  : underMouse()  ? QColor(26, 30, 38, 145)
-                                  : QColor(18, 20, 25, 128);
+        // ~35% translucent glass panel, slightly brighter on hover/press.
+        QColor bg = isDown()      ? QColor(30, 34, 42, 110)
+                  : underMouse()  ? QColor(26, 30, 38, 105)
+                                  : QColor(18, 20, 25, 89);
         painter.fillPath(path, bg);
 
         // Qt/QSS has no real backdrop-blur (can't blur what's actually
@@ -313,17 +313,26 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // Water-like drift: instead of one fixed diagonal gradient (which
     // always put the turquoise in the same corner, just wobbling in
     // place), scatter a few soft turquoise/blue "blobs" that drift around
-    // independently on their own lissajous-style paths, over a solid deep
-    // base. Reads as moving water instead of a static banded gradient.
-    QColor deep(5, 10, 18);
+    // independently on their own lissajous-style paths, over a dark
+    // turquoise base (no black in the mix) so hue never fully bottoms out
+    // to a flat dark patch.
+    QColor deep(4, 22, 26);
     painter.fillPath(path, deep);
 
+    // Watercolor-style blend: more, softer, larger overlapping blobs with
+    // CompositionMode_Plus (additive) so overlapping colors bloom into new
+    // in-between hues instead of just stacking flat circles - this is what
+    // gives the "paint bleeding together" look instead of distinct blobs.
     struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
     static const Blob blobs[] = {
-        { 0.55, 0.40, 0.0,  1.7, 0.32, 0.30, 0.55, QColor(0, 176, 176, 150) },
-        { 0.35, 0.62, 2.1,  0.4, 0.30, 0.34, 0.60, QColor(10, 120, 170, 130) },
-        { 0.70, 0.28, 4.2,  3.0, 0.28, 0.26, 0.45, QColor(0, 200, 190, 110) },
+        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 168, 168, 95) },   // turquoise
+        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(20, 70, 235, 100) },  // bright deep blue
+        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 150, 150, 80) },   // dark turquoise
+        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(35, 95, 245, 85) },   // deep blue accent
+        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 120, 130, 90) },   // dark turquoise, tighter
     };
+
+    painter.setCompositionMode(QPainter::CompositionMode_Plus);
 
     const double twoPi = 6.283185307179586;
     for (const Blob& b : blobs)
@@ -334,10 +343,13 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
 
         QRadialGradient blob(QPointF(cx, cy), radius);
         blob.setColorAt(0.0, b.color);
+        blob.setColorAt(0.6, QColor(b.color.red(), b.color.green(), b.color.blue(), b.color.alpha() / 2));
         blob.setColorAt(1.0, QColor(b.color.red(), b.color.green(), b.color.blue(), 0));
 
         painter.fillPath(path, blob);
     }
+
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
     // Permanent black vignette: stays constant regardless of the bg
     // animation, darkening the corners/edges while leaving the center
