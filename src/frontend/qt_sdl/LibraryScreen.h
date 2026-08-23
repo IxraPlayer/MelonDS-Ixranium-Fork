@@ -10,6 +10,7 @@
 #include <QImage>
 #include <QTimer>
 #include <QColor>
+#include <QResizeEvent>
 
 class LibraryScreen : public QWidget
 {
@@ -27,6 +28,13 @@ public:
     // banner, archive entries, unreadable file, etc).
     static QImage loadRomIconImage(const QString& path);
 
+    // Reads the short game title out of the ROM's own icon/title banner
+    // (first line of the English title, same text shown on the real DS
+    // menu) instead of deriving a name from the filename. Returns an
+    // empty string if the ROM has no readable banner (archive entries,
+    // homebrew without a banner, etc) so the caller can fall back.
+    static QString loadRomShortTitle(const QString& path);
+
 signals:
     void romActivated(QString path);
     void addGameRequested();
@@ -34,6 +42,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
     // Watches every tile (including the "+" add-tile) to implement
     // press-and-drag reordering: press-drag past the OS drag threshold

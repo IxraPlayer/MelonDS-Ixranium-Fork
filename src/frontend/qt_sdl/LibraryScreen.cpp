@@ -179,7 +179,7 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
 
 void LibraryScreen::onBgTick()
 {
-    bgPhase += 0.0035;
+    bgPhase += 0.0070; // 2x speed
     if (bgPhase > 1000.0) bgPhase -= 1000.0; // keep the accumulator from growing unbounded across a long session
     update();
 }
@@ -236,15 +236,13 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
         painter.fillPath(path, blob);
     }
 
-    // Vignette: darken toward the center so tiles/text stay readable
-    // against a busy animated background, while fading out to nothing
-    // near the edges - that fade is what makes the border blend smoothly
-    // into the center instead of reading as two separate flat panels
-    // stacked with a hard seam between them.
+    // Permanent black vignette: stays constant regardless of the bg
+    // animation, darkening the corners/edges while leaving the center
+    // clear so tiles/text stay readable.
     QRadialGradient vignette(r.center(), std::max(r.width(), r.height()) * 0.75);
-    vignette.setColorAt(0.0, QColor(6, 8, 12, 235));
-    vignette.setColorAt(0.55, QColor(6, 8, 12, 190));
-    vignette.setColorAt(1.0, QColor(6, 8, 12, 0));
+    vignette.setColorAt(0.0, QColor(0, 0, 0, 0));
+    vignette.setColorAt(0.6, QColor(0, 0, 0, 90));
+    vignette.setColorAt(1.0, QColor(0, 0, 0, 220));
     painter.fillPath(path, vignette);
 
     QWidget::paintEvent(event);
@@ -252,8 +250,55 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
 
 QString LibraryScreen::displayName(const QString& path) const
 {
+    // Prefer the game's own short title (from its icon/title banner) over
+    // a name derived from the filename - filenames are often full romset
+    // names ("4175 - Naruto - Ninja Council 3 (Europe)(En,Fr,Es).nds")
+    // that get harshly truncated on a 140px tile, whereas the banner
+    // title is already the short name shown on a real DS's menu.
+    QString romTitle = loadRomShortTitle(path);
+    if (!romTitle.isEmpty())
+        return romTitle;
+
     QString name = QFileInfo(path.split('|').first()).completeBaseName();
     return name;
+}
+
+QString LibraryScreen::loadRomShortTitle(const QString& path)
+{
+    // Archive entries aren't supported for banner extraction yet (same
+    // limitation as loadRomIconImage) - let the caller fall back.
+    if (path.contains('|'))
+        return QString();
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return QString();
+
+    NDSHeader header;
+    if (file.read(reinterpret_cast<char*>(&header), sizeof(header)) != (qint64)sizeof(header))
+        return QString();
+
+    if (header.BannerOffset == 0)
+        return QString();
+
+    char16_t titleBuf[128];
+    if (!file.seek(header.BannerOffset + offsetof(NDSBanner, EnglishTitle)))
+        return QString();
+    if (file.read(reinterpret_cast<char*>(titleBuf), sizeof(titleBuf)) != (qint64)sizeof(titleBuf))
+        return QString();
+
+    // The banner title is up to 3 lines (game name / subtitle / publisher)
+    // separated by '\n' - the first line is the actual short game name,
+    // which is all we want for a tile label.
+    QString full = QString::fromUtf16(reinterpret_cast<const char16_t*>(titleBuf), 128);
+    int stop = full.indexOf(u'\n');
+    int nul = full.indexOf(QChar(0));
+    if (nul >= 0 && (stop < 0 || nul < stop))
+        stop = nul;
+    QString firstLine = (stop >= 0) ? full.left(stop) : full;
+    firstLine = firstLine.trimmed();
+
+    return firstLine;
 }
 
 QImage LibraryScreen::loadRomIconImage(const QString& path)
@@ -370,6 +415,34 @@ void LibraryScreen::addGame(const QString& path)
 
     tiles.insert(path, tile);
     relayout();
+}
+
+void LibraryScreen::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+
+    // Tiles are a fixed 140px with 18px grid spacing; recompute how many
+    // fit across the current width so the grid actually fills the row
+    // (wrapping to a new line once it can't fit another tile) instead of
+    // staying locked at a fixed column count and leaving empty space on
+    // the right on wider windows.
+    const int tileSize = 140;
+    const int spacing = 18;
+    const int margins = 24 * 2;
+    // Account for the scroll area's vertical scrollbar so tiles don't
+    // get squeezed/wrapped early once a scrollbar appears.
+    const int scrollBarAllowance = 24;
+
+    int available = width() - margins - scrollBarAllowance;
+    int newColumns = (available + spacing) / (tileSize + spacing);
+    if (newColumns < 1)
+        newColumns = 1;
+
+    if (newColumns != columns)
+    {
+        columns = newColumns;
+        relayout();
+    }
 }
 
 void LibraryScreen::relayout()
