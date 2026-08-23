@@ -254,6 +254,11 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // Custom title bar: drop the OS decorations and draw our own so the
     // minimize/maximize/close buttons match the rest of the panel styling.
     setWindowFlag(Qt::FramelessWindowHint, true);
+    // Without this the rounded corners painted by the .qss (border-radius: 18)
+    // still sit on an opaque square window surface, so the four corners
+    // outside the rounded path show through as solid black. Translucent
+    // background lets those corner pixels stay transparent instead.
+    setAttribute(Qt::WA_TranslucentBackground);
 
 #if QT_VERSION_MAJOR == 6 && WIN32
     // The "windows11" theme has pretty massive padding around menubar items, this makes Config and Help not fit in a window at 1x screen sizing
