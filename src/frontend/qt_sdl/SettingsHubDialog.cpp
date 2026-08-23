@@ -127,11 +127,9 @@ void SettingsHubDialog::paintEvent(QPaintEvent*)
     QPainterPath path;
     path.addRoundedRect(rect(), radius, radius);
 
-    // Genuinely translucent this time (alpha 205, not the near-opaque 235
-    // the .qss themes use elsewhere) - now that WA_TranslucentBackground
-    // is actually set, this blends against the desktop/game behind it
-    // instead of an opaque backing store.
-    painter.fillPath(path, QColor(0x12, 0x14, 0x1a, 205));
+    // Opaque now (alpha 255) - no longer blending against the desktop/game
+    // behind it, just a solid rounded-corner panel like the rest of the app.
+    painter.fillPath(path, QColor(0x12, 0x14, 0x1a, 255));
 }
 
 void SettingsHubDialog::resizeEvent(QResizeEvent* event)
