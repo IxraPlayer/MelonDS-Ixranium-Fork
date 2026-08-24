@@ -2805,29 +2805,16 @@ void MainWindow::toggleFullscreen()
 // needed for the visual result.
 void MainWindow::paintEvent(QPaintEvent* event)
 {
-    // We own 100% of this window's own background painting (see the
-    // constructor comment - WA_StyledBackground is deliberately NOT set,
-    // so the QSS panel rule for QMainWindow never gets a chance to draw
-    // and then get erased by this). Two layers:
-    //   1) a flat fill across the *entire* rect, corners included, so
-    //      there is never a stray unpainted/black pixel;
-    //   2) a rounded rect traced on top in a slightly lighter tone, which
-    //      is the only thing that needs to read as "rounded" - the flat
-    //      fill outside it is the same base color, so the true square
-    //      corners underneath it don't stand out.
+    // Every rounded-corner technique tried here - QRegion masking,
+    // WA_TranslucentBackground, a manually-drawn rounded outline - was
+    // unreliable on this system (no working compositor to blend/clip
+    // against). The one thing that DOES render correctly here is a native
+    // QMenu dropdown's own rounding, which goes through a completely
+    // different Qt code path we don't control. For this window: stop
+    // fighting it and just paint a flat, fully opaque rectangle. No mask,
+    // no translucency, no drawn corner radius.
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
-
-    const QColor bg(16, 18, 23);
-    p.fillRect(rect(), bg);
-
-    const int radius = 18;
-    QPainterPath path;
-    path.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
-    p.fillPath(path, bg);
-    p.setPen(QPen(QColor(255, 255, 255, 70), 1.4));
-    p.drawPath(path);
-
+    p.fillRect(rect(), QColor(16, 18, 23));
     QMainWindow::paintEvent(event);
 }
 

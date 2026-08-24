@@ -32,7 +32,6 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
-    void updateRoundedMask();
 
     QListWidget* sidebar;
     QStackedWidget* stack;
