@@ -34,6 +34,8 @@
 #include <QEvent>
 #include <QPointer>
 #include <QEventLoop>
+#include <QScreen>
+#include <QGuiApplication>
 #include <cmath>
 
 // Fades a QMenu dropdown in on open (slide+fade) and out on close.
@@ -319,8 +321,31 @@ void TopMenuButton::mousePressEvent(QMouseEvent* event)
         }
         else
         {
+            const QPoint anchor = mapToGlobal(QPoint(0, height()));
+
+            // Qt's own "keep the whole menu on screen" logic, when the menu
+            // is taller than the room left below the button, moves its TOP
+            // up (sometimes well above the button) rather than the bottom -
+            // that's why it wasn't landing flush under File. Instead, cap
+            // the menu's height to whatever room actually exists below the
+            // button on this screen, so Qt has no reason to move it up: it
+            // already fits starting exactly at the anchor point. Combined
+            // with SH_Menu_Scrollable (see PopupCornerFixStyle), any items
+            // that don't fit in that capped height - like Quit at the
+            // bottom of a long File menu - become reachable via the
+            // menu's built-in scroll arrows instead of being cut off.
+            QScreen* scr = QGuiApplication::screenAt(anchor);
+            if (!scr)
+                scr = QGuiApplication::primaryScreen();
+            if (scr)
+            {
+                const int margin = 8;
+                const int available = scr->availableGeometry().bottom() - anchor.y() - margin;
+                m_dropMenu->setMaximumHeight(qMax(available, 100));
+            }
+
             setDown(true);
-            m_dropMenu->popup(mapToGlobal(QPoint(0, height())));
+            m_dropMenu->popup(anchor);
         }
         event->accept();
         return;
