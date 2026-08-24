@@ -262,7 +262,17 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
     // Custom title bar: drop the OS decorations and draw our own so the
     // minimize/maximize/close buttons match the rest of the panel styling.
-    setWindowFlag(Qt::FramelessWindowHint, true);
+    // CustomizeWindowHint is set alongside FramelessWindowHint because on
+    // some X11 window managers (lightweight/non-compositing ones, e.g.
+    // Openbox-based setups) FramelessWindowHint alone is not enough to
+    // suppress the WM's own titlebar/border decoration - the WM still
+    // decorates the window and, on top of that, its shadow/corner-rounding
+    // compositing effect (meant for normal decorated windows) gets applied
+    // to it too, which is what shows up as the black corner artifacts.
+    // CustomizeWindowHint makes the "this app is undecorated" intent
+    // explicit rather than relying on FramelessWindowHint's default
+    // behavior, which is what those WMs actually check for.
+    setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::CustomizeWindowHint);
     // Both previous attempts at this (setMask() clipping, then
     // WA_TranslucentBackground) assumed the desktop compositor blends
     // per-pixel window transparency correctly. On this system it doesn't
@@ -718,7 +728,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
     // Custom title bar (drag to move, min/max/close) + centered, bigger
     // File/System/View/Config/Help row that grows the hovered entry.
-    titleBar = new CustomTitleBar(this);
+    titleBar = new CustomTitleBar(this, this);
     titleBarToolBar = new QToolBar(this);
     titleBarToolBar->setObjectName("titleBarToolBar");
     titleBarToolBar->setMovable(false);
