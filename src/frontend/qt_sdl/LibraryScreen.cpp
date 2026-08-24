@@ -77,7 +77,7 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
 
-        const qreal radius = 20.0;
+        const qreal radius = 0.0;
         QRectF r = rect().adjusted(0.75, 0.75, -0.75, -0.75);
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
@@ -343,7 +343,10 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // it. Round the bottom corners to match the window radius and use a
     // color close to the app's base background so the seam all but
     // disappears instead of reading as a separate panel/frame.
-    const qreal radius = 18.0;
+    // Window is fully square now (see MainWindow::paintEvent), so this no
+    // longer rounds the bottom corners - a rounded bottom here would
+    // mismatch the now-square window edge.
+    const qreal radius = 0.0;
     QRectF r = rect();
 
     QPainterPath path;
