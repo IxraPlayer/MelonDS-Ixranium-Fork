@@ -63,6 +63,22 @@ static QColor hueShifted(const QColor& c, int deltaDeg)
 // border possible - QSS alone can't animate, and letting QStyle draw
 // its own panel on top of a custom background is what caused the
 // "transparent tile showing the animated backdrop" bug earlier.
+// Extra room reserved on every side of each tile's real (grid-managed)
+// footprint so the hover "grow" effect below can scale the visible card
+// up without ever changing the widget's actual size/position. Growing
+// the *real* geometry used to be how this worked, but a QGridLayout can
+// re-assert/invalidate cell geometry at unpredictable times (scroll area
+// resize, any add/remove, even some internal Qt bookkeeping), which
+// snapped the grown tile back and - because relayout() rebuilds the
+// whole grid from `paths` - could visibly reshuffle/blank out other
+// cards while a card was mid-hover. Keeping the real footprint constant
+// and only scaling what's *painted*, inside this reserved margin,
+// makes that entire class of bug impossible: the layout never sees a
+// size change, so it never has a reason to move or drop anything.
+static const int kCardVisualSize = 140;
+static const int kCardHoverPad = 8; // >= half of (140 * 0.08) growth, rounded up
+static const int kCardFootprint = kCardVisualSize + kCardHoverPad * 2;
+
 class GameCardButton : public QToolButton
 {
 public:
@@ -74,41 +90,27 @@ public:
         connect(t, &QTimer::timeout, this, [this] { update(); });
         t->start(50);
 
-        // Hover "grow" effect: animate the widget's real geometry
-        // (inflated a few px around its own center) rather than a
-        // painter-only scale, so the card doesn't get clipped to its old
-        // bounds by its parent/siblings. QGridLayout only re-asserts a
-        // cell's geometry when the layout itself is invalidated (grid
-        // resize, item add/remove), not continuously, so a plain
-        // setGeometry() call here sticks until then - no layout fighting.
+        // Hover "grow" effect: purely a paint-time transform around the
+        // card's own center, drawn inside the padding reserved above.
+        // The widget's real geometry (and therefore the grid layout)
+        // never changes, so neighboring tiles can't be pushed, hidden,
+        // or reflowed by a hover.
         scaleAnim = new QVariantAnimation(this);
         scaleAnim->setDuration(120);
         scaleAnim->setEasingCurve(QEasingCurve::OutCubic);
         connect(scaleAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v)
         {
-            qreal s = v.toReal();
-            QRect base = baseGeometry.isValid() ? baseGeometry : geometry();
-            int dw = int(base.width()  * (s - 1.0));
-            int dh = int(base.height() * (s - 1.0));
-            programmaticResize = true;
-            setGeometry(base.adjusted(-dw / 2, -dh / 2, dw / 2, dh / 2));
-            programmaticResize = false;
+            hoverScale = v.toReal();
+            update();
         });
     }
 
 protected:
-    void resizeEvent(QResizeEvent* e) override
-    {
-        QToolButton::resizeEvent(e);
-        if (!programmaticResize)
-            baseGeometry = geometry(); // real layout-driven size/position change - remember it as the "unhovered" rect
-    }
-
     void enterEvent(QEnterEvent*) override
     {
         raise(); // draw over neighboring cards instead of being clipped/overlapped by them
         scaleAnim->stop();
-        scaleAnim->setStartValue(1.0);
+        scaleAnim->setStartValue(hoverScale);
         scaleAnim->setEndValue(1.08);
         scaleAnim->start();
     }
@@ -116,7 +118,7 @@ protected:
     void leaveEvent(QEvent*) override
     {
         scaleAnim->stop();
-        scaleAnim->setStartValue(1.08);
+        scaleAnim->setStartValue(hoverScale);
         scaleAnim->setEndValue(1.0);
         scaleAnim->start();
     }
@@ -125,9 +127,17 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
+        // Scale everything below around the widget's center. Because the
+        // real widget is kCardHoverPad larger on every side than the
+        // visual card, this can grow right up to ~1.08x without ever
+        // touching (let alone clipping against) a neighboring tile.
+        painter.translate(rect().center());
+        painter.scale(hoverScale, hoverScale);
+        painter.translate(-rect().center());
 
         const qreal radius = 14.0;
-        QRectF r = rect().adjusted(0.75, 0.75, -0.75, -0.75);
+        QRectF r = QRectF(rect()).adjusted(kCardHoverPad + 0.75, kCardHoverPad + 0.75,
+                                            -kCardHoverPad - 0.75, -kCardHoverPad - 0.75);
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
 
@@ -202,8 +212,7 @@ private:
     bool isAddTile;
     QElapsedTimer glowClock;
     QVariantAnimation* scaleAnim = nullptr;
-    QRect baseGeometry;
-    bool programmaticResize = false;
+    qreal hoverScale = 1.0;
 };
 
 using namespace melonDS;
@@ -255,7 +264,11 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     auto* inner = new QWidget();
     inner->setStyleSheet("background: transparent;");
     grid = new QGridLayout(inner);
-    grid->setSpacing(18);
+    // Real widget footprint is kCardFootprint (140 visual + padding on
+    // each side reserved for the hover-grow paint effect - see
+    // GameCardButton above), so the raw grid spacing is trimmed by that
+    // same padding to keep the *visual* gap between cards at 18px.
+    grid->setSpacing(18 - 2 * kCardHoverPad);
     grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
     scroll->setWidget(inner);
@@ -264,7 +277,7 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     addTile = new GameCardButton(true, this);
     addTile->setObjectName("addGameTile");
     addTile->setText("+");
-    addTile->setFixedSize(140, 140);
+    addTile->setFixedSize(kCardFootprint, kCardFootprint);
     addTile->setToolButtonStyle(Qt::ToolButtonTextOnly);
     connect(addTile, &QToolButton::clicked, this, &LibraryScreen::addGameRequested);
 
@@ -590,7 +603,7 @@ void LibraryScreen::addGame(const QString& path)
     auto* tile = new GameCardButton(false, this);
     tile->setObjectName("gameCard");
     tile->setText(displayName(path));
-    tile->setFixedSize(140, 140);
+    tile->setFixedSize(kCardFootprint, kCardFootprint);
     tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     tile->setContextMenuPolicy(Qt::CustomContextMenu);
 
@@ -642,8 +655,8 @@ void LibraryScreen::resizeEvent(QResizeEvent* event)
     // (wrapping to a new line once it can't fit another tile) instead of
     // staying locked at a fixed column count and leaving empty space on
     // the right on wider windows.
-    const int tileSize = 140;
-    const int spacing = 18;
+    const int tileSize = kCardFootprint;
+    const int spacing = 18 - 2 * kCardHoverPad;
     const int margins = 24 * 2;
     // Account for the scroll area's vertical scrollbar so tiles don't
     // get squeezed/wrapped early once a scrollbar appears.
