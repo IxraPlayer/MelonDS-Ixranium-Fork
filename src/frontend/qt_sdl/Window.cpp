@@ -276,17 +276,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // isn't guaranteed to perform.
     //
     // So: give up on real per-pixel transparency for this window entirely.
-    // paintEvent() below unconditionally fills the *entire* rectangle -
-    // corners included - with an opaque color matching the QSS panel's own
-    // near-black background before the QSS rounded panel draws on top of
-    // it. The true (square) corners are still there physically, but since
-    // their fill color is indistinguishable from the panel's own
-    // background, there's nothing left to visually read as a "black
-    // square" - the rounded QSS border is what your eye follows, so it
-    // still reads as a rounded window. This has zero dependency on
-    // compositing, masking, or WA_StyledBackground timing, so it can't
-    // regress the same way again.
-    setAttribute(Qt::WA_StyledBackground, true);
+    // paintEvent() below draws the whole panel itself - flat fill plus the
+    // rounded silhouette - deliberately WITHOUT WA_StyledBackground. Qt
+    // paints WA_StyledBackground's QSS panel during the erase pass that
+    // runs BEFORE paintEvent() is called, so our own paintEvent drawing
+    // was covering/erasing it every frame, which is why corners went
+    // perfectly square with no rounded cue at all. Doing 100% of the
+    // painting ourselves, in one place, in the right order, means there's
+    // nothing left to race or get drawn over.
 
 #if QT_VERSION_MAJOR == 6 && WIN32
     // The "windows11" theme has pretty massive padding around menubar items, this makes Config and Help not fit in a window at 1x screen sizing
@@ -2808,15 +2805,29 @@ void MainWindow::toggleFullscreen()
 // needed for the visual result.
 void MainWindow::paintEvent(QPaintEvent* event)
 {
-    // See the WA_StyledBackground comment in the constructor: fill the
-    // whole rectangle - true square corners included - with a color that
-    // matches the QSS panel background, so there's no visible seam/black
-    // square regardless of whether real per-pixel transparency works on
-    // this system. This runs first; the base implementation (below) then
-    // lets the QSS-styled rounded panel/border draw on top of it via
-    // WA_StyledBackground.
+    // We own 100% of this window's own background painting (see the
+    // constructor comment - WA_StyledBackground is deliberately NOT set,
+    // so the QSS panel rule for QMainWindow never gets a chance to draw
+    // and then get erased by this). Two layers:
+    //   1) a flat fill across the *entire* rect, corners included, so
+    //      there is never a stray unpainted/black pixel;
+    //   2) a rounded rect traced on top in a slightly lighter tone, which
+    //      is the only thing that needs to read as "rounded" - the flat
+    //      fill outside it is the same base color, so the true square
+    //      corners underneath it don't stand out.
     QPainter p(this);
-    p.fillRect(rect(), QColor(16, 18, 23));
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor bg(16, 18, 23);
+    p.fillRect(rect(), bg);
+
+    const int radius = 18;
+    QPainterPath path;
+    path.addRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
+    p.fillPath(path, bg);
+    p.setPen(QPen(QColor(255, 255, 255, 70), 1.4));
+    p.drawPath(path);
+
     QMainWindow::paintEvent(event);
 }
 
