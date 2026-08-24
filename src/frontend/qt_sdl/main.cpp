@@ -38,6 +38,7 @@
 #include <QStandardPaths>
 #include <QTranslator>
 #include <QLocale>
+#include "PopupCornerFix.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDirIterator>
@@ -483,6 +484,7 @@ int main(int argc, char** argv)
             QApplication::setStyle(uitheme);
         }
     }
+    applyPopupCornerFix();
 
     // fix for Wayland OpenGL glitches
     QGuiApplication::setAttribute(Qt::AA_NativeWindows, false);

@@ -27,6 +27,7 @@
 #include "Platform.h"
 #include "Config.h"
 #include "main.h"
+#include "PopupCornerFix.h"
 
 InterfaceSettingsDialog* InterfaceSettingsDialog::currentDlg = nullptr;
 InterfaceSettingsDialog::InterfaceSettingsDialog(QWidget* parent) : QDialog(parent), ui(new Ui::InterfaceSettingsDialog)
@@ -196,6 +197,7 @@ void InterfaceSettingsDialog::done(int r)
             qApp->setStyle(themeName);
         else
             qApp->setStyle(*systemThemeName);
+        applyPopupCornerFix();
 
         {
             QFile qssFile(":/" + qssThemeName);

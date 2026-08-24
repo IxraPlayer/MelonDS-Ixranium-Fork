@@ -263,6 +263,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // Custom title bar: drop the OS decorations and draw our own so the
     // minimize/maximize/close buttons match the rest of the panel styling.
     setWindowFlag(Qt::FramelessWindowHint, true);
+    // updateFramelessWindowMask() below clips this window to a rounded
+    // QRegion, but without these two attributes Qt fills the full
+    // rectangle with the opaque palette color BEFORE paintEvent()/the mask
+    // apply - so the four corners outside the rounded region stayed solid
+    // black squares. WA_NoSystemBackground skips that autofill;
+    // WA_TranslucentBackground makes the corners genuinely transparent.
+    // (Same fix as SettingsHubDialog - see its constructor for the writeup.)
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_NoSystemBackground);
 
 #if QT_VERSION_MAJOR == 6 && WIN32
     // The "windows11" theme has pretty massive padding around menubar items, this makes Config and Help not fit in a window at 1x screen sizing
