@@ -375,10 +375,15 @@ void ScreenPanel::updateDebugOverlayText()
 
     debugOverlayLabel->setText(lines.join("\n"));
     debugOverlayLabel->adjustSize();
-    // debugOverlayLabel is a native child widget (see the constructor
-    // comment) so Qt's normal Z-order applies -- keep it on top of the
-    // native game surface on every refresh, not just when toggled.
-    debugOverlayLabel->raise();
+    // Chasing the exact native Z-order rule that was swallowing raise()
+    // wasn't worth it -- forcing a fresh hide+show each tick guarantees a
+    // real repaint on top every time, and at 1/sec it's imperceptible.
+    if (debugOverlayLabel->isVisible())
+    {
+        debugOverlayLabel->hide();
+        debugOverlayLabel->show();
+        debugOverlayLabel->raise();
+    }
 }
 
 void ScreenPanel::mousePressEvent(QMouseEvent* event)
