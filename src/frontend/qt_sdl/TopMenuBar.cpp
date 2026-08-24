@@ -70,7 +70,29 @@ protected:
     {
         if (obj == m_menu && event->type() == QEvent::Show)
         {
-            const QPoint finalPos = m_menu->pos();
+            QPoint finalPos = m_menu->pos();
+
+            // Relying on Qt's built-in "scrollable menu" arrows turned out
+            // unreliable here (it clipped items instead of showing scroll
+            // arrows through our proxy style/QSS). Guaranteed fix instead:
+            // if the menu - at its real, full, natural size - doesn't fit
+            // between the anchor and the bottom of the screen, just slide
+            // the whole thing up by exactly the overflow so every item
+            // (including Quit at the bottom of a long menu) stays on
+            // screen. X stays untouched, so it's still flush under its
+            // button; only pushed up, never down past the screen top.
+            QScreen* scr = QGuiApplication::screenAt(finalPos);
+            if (!scr)
+                scr = QGuiApplication::primaryScreen();
+            if (scr)
+            {
+                const QRect avail = scr->availableGeometry();
+                const int margin = 6;
+                const int overflow = (finalPos.y() + m_menu->height()) - (avail.bottom() - margin);
+                if (overflow > 0)
+                    finalPos.setY(qMax(avail.top() + margin, finalPos.y() - overflow));
+            }
+
             m_menu->setWindowOpacity(0.0);
             m_menu->move(finalPos.x(), finalPos.y() - 8);
 
@@ -321,31 +343,8 @@ void TopMenuButton::mousePressEvent(QMouseEvent* event)
         }
         else
         {
-            const QPoint anchor = mapToGlobal(QPoint(0, height()));
-
-            // Qt's own "keep the whole menu on screen" logic, when the menu
-            // is taller than the room left below the button, moves its TOP
-            // up (sometimes well above the button) rather than the bottom -
-            // that's why it wasn't landing flush under File. Instead, cap
-            // the menu's height to whatever room actually exists below the
-            // button on this screen, so Qt has no reason to move it up: it
-            // already fits starting exactly at the anchor point. Combined
-            // with SH_Menu_Scrollable (see PopupCornerFixStyle), any items
-            // that don't fit in that capped height - like Quit at the
-            // bottom of a long File menu - become reachable via the
-            // menu's built-in scroll arrows instead of being cut off.
-            QScreen* scr = QGuiApplication::screenAt(anchor);
-            if (!scr)
-                scr = QGuiApplication::primaryScreen();
-            if (scr)
-            {
-                const int margin = 8;
-                const int available = scr->availableGeometry().bottom() - anchor.y() - margin;
-                m_dropMenu->setMaximumHeight(qMax(available, 100));
-            }
-
             setDown(true);
-            m_dropMenu->popup(anchor);
+            m_dropMenu->popup(mapToGlobal(QPoint(0, height())));
         }
         event->accept();
         return;
