@@ -47,6 +47,11 @@
 #include <shobjidl.h>
 #include <objbase.h>
 #endif
+#if defined(Q_OS_LINUX)
+#include <QGuiApplication>
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#endif
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QGraphicsOpacityEffect>
@@ -241,6 +246,48 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 
 
 
+#if defined(Q_OS_LINUX)
+// Qt::FramelessWindowHint / Qt::CustomizeWindowHint are a *request* to the
+// window manager - Qt translates them into WM hints internally, but some
+// lightweight/non-compositing WMs (Openbox and similar) don't fully honor
+// that translation and still paint their own titlebar + border decoration
+// on top of ours. That's what caused the second/duplicate titlebar and the
+// rounded corners on the outer window edge in bug reports: those corners
+// and that top bar belong to the WM's decoration, not to anything this app
+// paints, so no amount of changing our own QSS/paintEvent can remove them.
+//
+// _MOTIF_WM_HINTS is the actual X11 property nearly every WM (including
+// Openbox) checks to decide whether to decorate a window at all, so we set
+// it directly instead of relying on Qt's flag translation reaching it.
+static void forceX11Undecorated(QWidget* window)
+{
+    if (QGuiApplication::platformName() != "xcb")
+        return; // this property is an X11-ism; Wayland sessions don't use it
+
+    WId wid = window->winId(); // forces creation of the native X11 window
+
+    Display* dpy = XOpenDisplay(nullptr);
+    if (!dpy)
+        return;
+
+    Atom mwmHintsAtom = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
+    struct
+    {
+        unsigned long flags;
+        unsigned long functions;
+        unsigned long decorations;
+        long input_mode;
+        unsigned long status;
+    } hints = { 1L << 1 /* MWM_HINTS_DECORATIONS */, 0, 0 /* no decorations */, 0, 0 };
+
+    XChangeProperty(dpy, wid, mwmHintsAtom, mwmHintsAtom, 32, PropModeReplace,
+                     reinterpret_cast<unsigned char*>(&hints), 5);
+
+    XFlush(dpy);
+    XCloseDisplay(dpy);
+}
+#endif
+
 MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     QMainWindow(parent),
     windowID(id),
@@ -273,6 +320,14 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // explicit rather than relying on FramelessWindowHint's default
     // behavior, which is what those WMs actually check for.
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::CustomizeWindowHint);
+#if defined(Q_OS_LINUX)
+    // Belt-and-suspenders for WMs (Openbox, etc.) that don't fully honor
+    // the flags above: tell X11 directly, via the property those WMs
+    // actually check, not to decorate this window at all. This is what
+    // removes the WM's own titlebar/rounded-corner decoration that was
+    // showing up doubled above our own custom titlebar.
+    forceX11Undecorated(this);
+#endif
     // Both previous attempts at this (setMask() clipping, then
     // WA_TranslucentBackground) assumed the desktop compositor blends
     // per-pixel window transparency correctly. On this system it doesn't
