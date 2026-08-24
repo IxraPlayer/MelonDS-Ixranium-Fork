@@ -33,30 +33,34 @@
 #include <QLabel>
 #include <QEvent>
 #include <QPointer>
+#include <QEventLoop>
 #include <cmath>
 
-// Fades+slides a QMenu dropdown in on open. Closing a real QMenu can't be
-// delayed the way a top-level window's closeEvent can (its exec() loop
-// quits the moment it's actually hidden, and ignoring hideEvent doesn't
-// stop a popup from closing), so the close animation is faked: grab a
-// screenshot of the menu right before it really hides, show that image in
-// a tiny borrowed overlay at the same spot, and fade the overlay out while
-// the real menu disappears instantly underneath it.
-// NOTE: the open/close fades below animate QWidget::windowOpacity (a native,
-// compositor-level alpha blend of the whole top-level window) rather than a
-// QGraphicsOpacityEffect. A QGraphicsOpacityEffect forces Qt to repaint the
-// widget into an offscreen buffer in software on every animation tick; on a
-// window that ALSO has WA_TranslucentBackground set (needed elsewhere for
-// the menu's rounded corners), stacking that software recomposite on top of
-// the native per-pixel alpha channel is what was producing the flicker/
-// "shake" right as the popup closed. windowOpacity has no such conflict.
+// Fades a QMenu dropdown in on open (slide+fade) and out on close.
+//
+// The close side used to work by grabbing a screenshot of the menu right
+// before Qt actually hid it, showing that image in a second borrowed
+// overlay window, and fading THAT out while the real menu vanished
+// instantly underneath. In practice that second window is itself a new
+// native top-level widget, and asking the OS/compositor to map and paint
+// it happens asynchronously - there was no guarantee it was actually up
+// on screen in the same frame the real menu disappeared in, so what got
+// seen was: real menu blinks out -> (gap) -> ghost blinks in -> fades.
+// That's the "gidip gelip" flicker.
+//
+// Instead we now fade the REAL menu in place and keep Qt from hiding it
+// until the fade finishes: QMenu::aboutToHide fires synchronously, before
+// Qt calls hide() on the widget, so blocking inside that slot with a tiny
+// local QEventLoop - stepping the real menu's windowOpacity down while
+// that loop pumps paint events - lets it visibly fade exactly where it
+// already is. No second window, no timing gap.
 class MenuFadeAnimator : public QObject
 {
 public:
     explicit MenuFadeAnimator(QMenu* menu) : QObject(menu), m_menu(menu)
     {
         menu->installEventFilter(this);
-        connect(menu, &QMenu::aboutToHide, this, &MenuFadeAnimator::showGhost);
+        connect(menu, &QMenu::aboutToHide, this, &MenuFadeAnimator::fadeOutAndHide);
     }
 
 protected:
@@ -86,48 +90,43 @@ protected:
     }
 
 private:
-    void showGhost()
+    void fadeOutAndHide()
     {
-        // If the menu is closed while its open-animation is still in
-        // flight (quick click, or clicking straight to another top-bar
-        // button), the position/opacity animations above keep ticking and
-        // touching the real popup window's geometry/opacity right as it's
-        // being torn down. Cut them off first, before grabbing anything.
+        // If we're closing while the open animation is still in flight
+        // (quick click), stop it first so it can't fight the fade-out
+        // below or leave opacity/position in a half-finished state.
         if (m_posAnim)
             m_posAnim->stop();
         if (m_opAnim)
             m_opAnim->stop();
+
+        if (m_reentrant)
+            return;
+        m_reentrant = true;
+
         m_menu->setWindowOpacity(1.0);
 
-        if (m_menu->size().isEmpty())
-            return;
+        QEventLoop loop;
+        QPropertyAnimation anim(m_menu, "windowOpacity");
+        anim.setDuration(120);
+        anim.setStartValue(1.0);
+        anim.setEndValue(0.0);
+        anim.setEasingCurve(QEasingCurve::InCubic);
+        connect(&anim, &QPropertyAnimation::finished, &loop, &QEventLoop::quit);
+        anim.start();
+        loop.exec();
 
-        auto* ghost = new QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint
-                                            | Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
-        ghost->setAttribute(Qt::WA_TranslucentBackground);
-        ghost->setAttribute(Qt::WA_ShowWithoutActivating);
-        ghost->setAttribute(Qt::WA_DeleteOnClose);
-        ghost->setGeometry(m_menu->geometry());
-
-        auto* label = new QLabel(ghost);
-        label->setPixmap(m_menu->grab());
-        label->setGeometry(ghost->rect());
-
-        ghost->setWindowOpacity(1.0);
-        ghost->show();
-
-        auto* anim = new QPropertyAnimation(ghost, "windowOpacity", ghost);
-        anim->setDuration(120);
-        anim->setStartValue(1.0);
-        anim->setEndValue(0.0);
-        anim->setEasingCurve(QEasingCurve::InCubic);
-        connect(anim, &QPropertyAnimation::finished, ghost, &QWidget::close);
-        anim->start(QAbstractAnimation::DeleteWhenStopped);
+        // Reset for the next time this menu opens; harmless if the menu
+        // got deleted mid-loop since m_menu is only touched through the
+        // still-alive QPropertyAnimation/QObject parent chain above.
+        m_menu->setWindowOpacity(1.0);
+        m_reentrant = false;
     }
 
     QMenu* m_menu;
     QPointer<QPropertyAnimation> m_posAnim;
     QPointer<QPropertyAnimation> m_opAnim;
+    bool m_reentrant = false;
 };
 
 #ifndef M_PI
