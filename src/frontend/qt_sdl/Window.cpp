@@ -51,6 +51,31 @@
 #include <QGuiApplication>
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+// Xlib.h #defines plain identifiers like None/Bool/Status/Unsorted/etc as
+// preprocessor macros. Every Qt header included AFTER this point that uses
+// those words as an enumerator name (e.g. QStyleOptionTab::CornerWidgets'
+// "None", QAbstractItemView's "Unsorted", QStyleOptionToolButton's "Bool"-
+// adjacent members) gets silently text-substituted before the compiler ever
+// sees the real identifier, which is what produces the cascade of
+// "has not been declared" / "template argument 1 is invalid" errors in
+// qstyleoption.h and everything that transitively includes it
+// (QListWidget, QTableWidget, QToolBar, ...). Undefine the offending X11
+// macros immediately after pulling in Xlib/Xatom so they can't leak into
+// any later header.
+#undef None
+#undef Bool
+#undef Status
+#undef Unsorted
+#undef CursorShape
+#undef KeyPress
+#undef KeyRelease
+#undef FocusIn
+#undef FocusOut
+#undef FontChange
+#undef Expose
+#undef Above
+#undef Below
+#undef Complex
 #endif
 #include <QHBoxLayout>
 #include <QLabel>
