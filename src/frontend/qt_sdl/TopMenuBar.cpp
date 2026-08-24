@@ -32,6 +32,7 @@
 #include <QGraphicsOpacityEffect>
 #include <QLabel>
 #include <QEvent>
+#include <QPointer>
 #include <cmath>
 
 // Fades+slides a QMenu dropdown in on open. Closing a real QMenu can't be
@@ -44,7 +45,8 @@
 class MenuFadeAnimator : public QObject
 {
 public:
-    explicit MenuFadeAnimator(QMenu* menu) : QObject(menu), m_menu(menu)
+    explicit MenuFadeAnimator(QMenu* menu, QWidget* anchorBtn = nullptr)
+        : QObject(menu), m_menu(menu), m_anchorBtn(anchorBtn)
     {
         m_effect = new QGraphicsOpacityEffect(menu);
         m_effect->setOpacity(1.0);
@@ -58,23 +60,33 @@ protected:
     {
         if (obj == m_menu && event->type() == QEvent::Show)
         {
-            const QPoint finalPos = m_menu->pos();
+            // Qt's automatic popup placement for a QToolButton menu can end
+            // up wrong on this frameless/custom-titlebar window (the menu
+            // was observed opening near the very top of the window instead
+            // of right under its button). Rather than trust whatever Qt
+            // already computed, pin the Y coordinate to just below the
+            // button that owns this menu - that's the only correct answer
+            // regardless of what Qt's internal heuristic decided.
+            QPoint finalPos = m_menu->pos();
+            if (m_anchorBtn)
+                finalPos.setY(m_anchorBtn->mapToGlobal(QPoint(0, m_anchorBtn->height())).y());
+
             m_menu->move(finalPos.x(), finalPos.y() - 8);
             m_effect->setOpacity(0.0);
 
-            auto* posAnim = new QPropertyAnimation(m_menu, "pos", m_menu);
-            posAnim->setDuration(150);
-            posAnim->setStartValue(QPoint(finalPos.x(), finalPos.y() - 8));
-            posAnim->setEndValue(finalPos);
-            posAnim->setEasingCurve(QEasingCurve::OutCubic);
-            posAnim->start(QAbstractAnimation::DeleteWhenStopped);
+            m_posAnim = new QPropertyAnimation(m_menu, "pos", m_menu);
+            m_posAnim->setDuration(150);
+            m_posAnim->setStartValue(QPoint(finalPos.x(), finalPos.y() - 8));
+            m_posAnim->setEndValue(finalPos);
+            m_posAnim->setEasingCurve(QEasingCurve::OutCubic);
+            m_posAnim->start(QAbstractAnimation::DeleteWhenStopped);
 
-            auto* opAnim = new QPropertyAnimation(m_effect, "opacity", m_menu);
-            opAnim->setDuration(150);
-            opAnim->setStartValue(0.0);
-            opAnim->setEndValue(1.0);
-            opAnim->setEasingCurve(QEasingCurve::OutCubic);
-            opAnim->start(QAbstractAnimation::DeleteWhenStopped);
+            m_opAnim = new QPropertyAnimation(m_effect, "opacity", m_menu);
+            m_opAnim->setDuration(150);
+            m_opAnim->setStartValue(0.0);
+            m_opAnim->setEndValue(1.0);
+            m_opAnim->setEasingCurve(QEasingCurve::OutCubic);
+            m_opAnim->start(QAbstractAnimation::DeleteWhenStopped);
         }
         return false;
     }
@@ -82,6 +94,19 @@ protected:
 private:
     void showGhost()
     {
+        // If the menu is closed while its open-animation is still in
+        // flight (quick click, or clicking straight to another top-bar
+        // button), the position/opacity animations above keep ticking and
+        // keep calling move()/repaint on the real popup window right as
+        // it's being torn down - that's what read as a "shake" right at
+        // close time. Cut them off first so nothing touches the real
+        // menu's geometry once we've grabbed its snapshot.
+        if (m_posAnim)
+            m_posAnim->stop();
+        if (m_opAnim)
+            m_opAnim->stop();
+        m_effect->setOpacity(1.0);
+
         if (m_menu->size().isEmpty())
             return;
 
@@ -110,7 +135,10 @@ private:
     }
 
     QMenu* m_menu;
+    QWidget* m_anchorBtn;
     QGraphicsOpacityEffect* m_effect;
+    QPointer<QPropertyAnimation> m_posAnim;
+    QPointer<QPropertyAnimation> m_opAnim;
 };
 
 #ifndef M_PI
@@ -416,7 +444,19 @@ TopMenuButton* TopMenuBar::addMenuButton(const QString& text, QMenu* menu)
     if (menu)
     {
         btn->setMenu(menu);
-        new MenuFadeAnimator(menu);
+        new MenuFadeAnimator(menu, btn);
+
+        // QToolButton keeps itself visually "pressed" (our #topMenuButton:pressed
+        // blue outline) while its menu is open. When that menu gets closed
+        // because the user clicked a *different* top-bar button rather than
+        // this one, Qt doesn't always clear this button's sunken state - the
+        // blue highlight is left stuck on until something else nudges it.
+        // Force it off the moment this menu is gone.
+        connect(menu, &QMenu::aboutToHide, btn, [btn]()
+        {
+            btn->setDown(false);
+            btn->update();
+        });
     }
 
     auto* layout = static_cast<QHBoxLayout*>(this->layout());
