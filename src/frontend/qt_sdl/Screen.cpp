@@ -113,40 +113,15 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     splashText[2].rendered = false;
     splashText[2].rainbowstart = -1;
 
-    // This panel paints straight to a native window surface
-    // (WA_PaintOnScreen / WA_NativeWindow, set further down for the GL/
-    // software renderers), which bypasses Qt's normal widget compositing.
-    // A plain (non-native) child QLabel can't reliably show *on top* of
-    // that -- Qt only respects raise()/Z-order between sibling widgets
-    // when they're either both native or both non-native; mixing the two
-    // means the native surface always wins regardless of Z-order, so new
-    // text only became visible for a moment right when the overlay was
-    // toggled and then got instantly covered again by the next frame.
-    // Making the label native too (its own OS-level child surface) puts
-    // it back under Qt's normal native stacking rules, where raise()
-    // actually works.
-    //
-    // (A separate always-on-top top-level window was tried instead, but
-    // WA_TransparentForMouseEvents doesn't reliably click-through between
-    // two different top-level windows on every platform/WM -- it ate
-    // clicks meant for the game underneath. A native child avoids that
-    // since it's still part of this window, not a second one.)
-    debugOverlayLabel = new QLabel(this);
-    debugOverlayLabel->setAttribute(Qt::WA_NativeWindow, true);
-    debugOverlayLabel->setObjectName("debugOverlayLabel");
-    debugOverlayLabel->setStyleSheet(
-        "QLabel#debugOverlayLabel {"
-        "  background-color: rgba(0, 0, 0, 150);"
-        "  color: #30FF30;"
-        "  font-family: monospace;"
-        "  font-size: 11px;"
-        "  padding: 4px 6px;"
-        "  border-radius: 4px;"
-        "}");
-    debugOverlayLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    debugOverlayLabel->move(8, 8);
-    debugOverlayLabel->hide();
-    debugOverlayLabel->raise();
+    // See the comment on debugOverlayItem in Screen.h for why this is an
+    // OSD-style item instead of a separate QLabel widget.
+    debugOverlayVisible_ = false;
+    debugOverlayItem.id = 0x80000003; // distinct from splashText ids (0x80000000-2)
+    debugOverlayItem.timestamp = 0;
+    debugOverlayItem.text[0] = '\0';
+    debugOverlayItem.color = 0x30FF30;
+    debugOverlayItem.rendered = false;
+    debugOverlayItem.rainbowstart = -1;
 
     debugOverlayTimer = new QTimer(this);
     connect(debugOverlayTimer, &QTimer::timeout, this, &ScreenPanel::updateDebugOverlayText);
@@ -288,34 +263,34 @@ void ScreenPanel::onAutoScreenSizingChanged(int sizing)
 void ScreenPanel::resizeEvent(QResizeEvent* event)
 {
     setupScreenLayout();
-    if (debugOverlayLabel)
-    {
-        debugOverlayLabel->adjustSize();
-        debugOverlayLabel->move(8, 8);
-        debugOverlayLabel->raise();
-    }
     QWidget::resizeEvent(event);
 }
 
 void ScreenPanel::setDebugOverlayVisible(bool visible)
 {
+    debugOverlayVisible_ = visible;
+
     if (visible)
     {
         updateDebugOverlayText();
-        debugOverlayLabel->show();
-        debugOverlayLabel->raise();
         debugOverlayTimer->start(1000);
     }
     else
     {
         debugOverlayTimer->stop();
-        debugOverlayLabel->hide();
+
+        // Drop the cached bitmap/texture; it'll be rebuilt from scratch
+        // next time the overlay is turned on.
+        osdMutex.lock();
+        osdDeleteItem(&debugOverlayItem);
+        debugOverlayItem.rendered = false;
+        osdMutex.unlock();
     }
 }
 
 bool ScreenPanel::debugOverlayVisible() const
 {
-    return debugOverlayLabel && debugOverlayLabel->isVisible();
+    return debugOverlayVisible_;
 }
 
 void ScreenPanel::updateDebugOverlayText()
@@ -373,17 +348,18 @@ void ScreenPanel::updateDebugOverlayText()
     if (lines.isEmpty())
         lines << "Debug overlay: no fields enabled";
 
-    debugOverlayLabel->setText(lines.join("\n"));
-    debugOverlayLabel->adjustSize();
-    // Chasing the exact native Z-order rule that was swallowing raise()
-    // wasn't worth it -- forcing a fresh hide+show each tick guarantees a
-    // real repaint on top every time, and at 1/sec it's imperceptible.
-    if (debugOverlayLabel->isVisible())
-    {
-        debugOverlayLabel->hide();
-        debugOverlayLabel->show();
-        debugOverlayLabel->raise();
-    }
+    QByteArray utf8 = lines.join("\n").toUtf8();
+
+    osdMutex.lock();
+    strncpy(debugOverlayItem.text, utf8.constData(), 255);
+    debugOverlayItem.text[255] = '\0';
+    // Force a re-render (and, on GL, a fresh texture upload) next time
+    // osdUpdate() runs - that happens inside drawScreen()/paintEvent(),
+    // i.e. on the same thread and as part of the same frame that
+    // actually gets presented, so there's no separate surface for the
+    // window server to race against.
+    debugOverlayItem.rendered = false;
+    osdMutex.unlock();
 }
 
 void ScreenPanel::mousePressEvent(QMouseEvent* event)
@@ -997,6 +973,20 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         osdMutex.unlock();
     }
+
+    if (debugOverlayVisible_)
+    {
+        osdMutex.lock();
+        if (!debugOverlayItem.rendered)
+            osdRenderItem(&debugOverlayItem);
+
+        painter.fillRect(QRect(kOSDMargin - 4, kOSDMargin - 2,
+                                debugOverlayItem.bitmap.width() + 8,
+                                debugOverlayItem.bitmap.height() + 4),
+                          QColor(0, 0, 0, 150));
+        painter.drawImage(kOSDMargin, kOSDMargin, debugOverlayItem.bitmap);
+        osdMutex.unlock();
+    }
 }
 
 
@@ -1393,6 +1383,39 @@ void ScreenPanelGL::drawScreen()
         glDisable(GL_BLEND);
         glUseProgram(0);
 
+        osdMutex.unlock();
+    }
+
+    if (debugOverlayVisible_)
+    {
+        osdMutex.lock();
+        if (!debugOverlayItem.rendered)
+            osdRenderItem(&debugOverlayItem); // GL override uploads the texture; needs the current GL context, which we already have here
+
+        if (osdTextures.count(debugOverlayItem.id))
+        {
+            glUseProgram(osdShader);
+
+            glUniform2f(osdScreenSizeULoc, w, h);
+            glUniform1f(osdScaleFactorULoc, factor);
+            glUniform1f(osdTexScaleULoc, 1.0);
+
+            glBindBuffer(GL_ARRAY_BUFFER, osdVertexBuffer);
+            glBindVertexArray(osdVertexArray);
+
+            glActiveTexture(GL_TEXTURE0);
+
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glBindTexture(GL_TEXTURE_2D, osdTextures[debugOverlayItem.id]);
+            glUniform2i(osdPosULoc, kOSDMargin, kOSDMargin);
+            glUniform2i(osdSizeULoc, debugOverlayItem.bitmap.width(), debugOverlayItem.bitmap.height());
+            glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+            glDisable(GL_BLEND);
+            glUseProgram(0);
+        }
         osdMutex.unlock();
     }
 

@@ -29,7 +29,6 @@
 #include <QScreen>
 #include <QCloseEvent>
 #include <QTimer>
-#include <QLabel>
 
 #include "glad/glad.h"
 #include "ScreenLayout.h"
@@ -72,10 +71,9 @@ public:
     void osdAddMessage(unsigned int color, const char* msg);
 
     // Debug overlay (FPS/CPU/RAM), toggled via the hotkey assigned in
-    // Settings > Debug settings. Lives on the base ScreenPanel so both
-    // the native (QPainter) and GL renderers get it identically, as a
-    // plain child QLabel on top of whichever one is active - no need to
-    // touch either renderer's paint/GL code.
+    // Settings > Debug settings. Lives on the base ScreenPanel and is
+    // drawn through the shared OSD pipeline (see debugOverlayItem below)
+    // so both the native (QPainter) and GL renderers show it identically.
     void setDebugOverlayVisible(bool visible);
     bool debugOverlayVisible() const;
 
@@ -87,8 +85,8 @@ private slots:
     void updateDebugOverlayText();
 
 protected:
-    QLabel* debugOverlayLabel;
     QTimer* debugOverlayTimer;
+    bool debugOverlayVisible_;
 
 
     MainWindow* mainWindow;
@@ -139,6 +137,26 @@ protected:
     QPixmap splashLogo;
     OSDItem splashText[3];
     QPoint splashPos[4];
+
+    // Debug overlay (FPS/CPU/RAM/etc). Rendered through the very same
+    // OSD bitmap/texture pipeline as regular OSD messages and the splash
+    // text (see osdRenderItem/osdDeleteItem below), instead of a separate
+    // native QLabel widget. It used to be a QLabel sibling that got its
+    // text/visibility poked once a second from a QTimer on the GUI
+    // thread, while ScreenPanelGL::drawScreen() calls glContext->
+    // SwapBuffers() directly to the same native window surface from
+    // EmuThread (a *different* thread) many times per second. Those two
+    // things race with no synchronization: whichever one the window
+    // server/compositor happens to present last wins, so the label's
+    // fresh pixels were getting stomped by the next emulator frame
+    // almost immediately, which is why the overlay looked frozen/never
+    // updated live. Piggybacking on osdItems avoids this: the bitmap is
+    // (re)rendered inside osdUpdate(), which already runs on whichever
+    // thread is actually producing that frame (EmuThread for GL, the GUI
+    // thread for the QPainter/native path), so the text is always drawn
+    // as part of the same frame that gets presented - no separate
+    // surface, no cross-thread race.
+    OSDItem debugOverlayItem;
 
     void loadConfig();
 
