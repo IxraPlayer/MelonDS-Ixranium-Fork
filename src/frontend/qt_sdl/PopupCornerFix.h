@@ -33,6 +33,19 @@ public:
             w->setAttribute(Qt::WA_NoSystemBackground);
         }
     }
+
+    // Some base styles (e.g. the native Windows one) report menus as never
+    // scrollable, so a QMenu taller than the screen just gets silently
+    // repositioned/clipped instead of showing scroll arrows. Force it on
+    // everywhere so a long dropdown that runs off the bottom of the screen
+    // scrolls instead of being cut off or jumping to a weird spot.
+    int styleHint(QStyle::StyleHint hint, const QStyleOption* option = nullptr,
+                   const QWidget* widget = nullptr, QStyleHintReturn* returnData = nullptr) const override
+    {
+        if (hint == QStyle::SH_Menu_Scrollable)
+            return 1;
+        return QProxyStyle::styleHint(hint, option, widget, returnData);
+    }
 };
 
 // Call this right after QApplication::setStyle(...)/QApplication::setStyle(name)

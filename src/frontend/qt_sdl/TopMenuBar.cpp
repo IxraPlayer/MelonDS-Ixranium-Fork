@@ -42,15 +42,19 @@
 // screenshot of the menu right before it really hides, show that image in
 // a tiny borrowed overlay at the same spot, and fade the overlay out while
 // the real menu disappears instantly underneath it.
+// NOTE: the open/close fades below animate QWidget::windowOpacity (a native,
+// compositor-level alpha blend of the whole top-level window) rather than a
+// QGraphicsOpacityEffect. A QGraphicsOpacityEffect forces Qt to repaint the
+// widget into an offscreen buffer in software on every animation tick; on a
+// window that ALSO has WA_TranslucentBackground set (needed elsewhere for
+// the menu's rounded corners), stacking that software recomposite on top of
+// the native per-pixel alpha channel is what was producing the flicker/
+// "shake" right as the popup closed. windowOpacity has no such conflict.
 class MenuFadeAnimator : public QObject
 {
 public:
-    explicit MenuFadeAnimator(QMenu* menu, QWidget* anchorBtn = nullptr)
-        : QObject(menu), m_menu(menu), m_anchorBtn(anchorBtn)
+    explicit MenuFadeAnimator(QMenu* menu) : QObject(menu), m_menu(menu)
     {
-        m_effect = new QGraphicsOpacityEffect(menu);
-        m_effect->setOpacity(1.0);
-        menu->setGraphicsEffect(m_effect);
         menu->installEventFilter(this);
         connect(menu, &QMenu::aboutToHide, this, &MenuFadeAnimator::showGhost);
     }
@@ -60,19 +64,9 @@ protected:
     {
         if (obj == m_menu && event->type() == QEvent::Show)
         {
-            // Qt's automatic popup placement for a QToolButton menu can end
-            // up wrong on this frameless/custom-titlebar window (the menu
-            // was observed opening near the very top of the window instead
-            // of right under its button). Rather than trust whatever Qt
-            // already computed, pin the Y coordinate to just below the
-            // button that owns this menu - that's the only correct answer
-            // regardless of what Qt's internal heuristic decided.
-            QPoint finalPos = m_menu->pos();
-            if (m_anchorBtn)
-                finalPos.setY(m_anchorBtn->mapToGlobal(QPoint(0, m_anchorBtn->height())).y());
-
+            const QPoint finalPos = m_menu->pos();
+            m_menu->setWindowOpacity(0.0);
             m_menu->move(finalPos.x(), finalPos.y() - 8);
-            m_effect->setOpacity(0.0);
 
             m_posAnim = new QPropertyAnimation(m_menu, "pos", m_menu);
             m_posAnim->setDuration(150);
@@ -81,7 +75,7 @@ protected:
             m_posAnim->setEasingCurve(QEasingCurve::OutCubic);
             m_posAnim->start(QAbstractAnimation::DeleteWhenStopped);
 
-            m_opAnim = new QPropertyAnimation(m_effect, "opacity", m_menu);
+            m_opAnim = new QPropertyAnimation(m_menu, "windowOpacity", m_menu);
             m_opAnim->setDuration(150);
             m_opAnim->setStartValue(0.0);
             m_opAnim->setEndValue(1.0);
@@ -97,15 +91,13 @@ private:
         // If the menu is closed while its open-animation is still in
         // flight (quick click, or clicking straight to another top-bar
         // button), the position/opacity animations above keep ticking and
-        // keep calling move()/repaint on the real popup window right as
-        // it's being torn down - that's what read as a "shake" right at
-        // close time. Cut them off first so nothing touches the real
-        // menu's geometry once we've grabbed its snapshot.
+        // touching the real popup window's geometry/opacity right as it's
+        // being torn down. Cut them off first, before grabbing anything.
         if (m_posAnim)
             m_posAnim->stop();
         if (m_opAnim)
             m_opAnim->stop();
-        m_effect->setOpacity(1.0);
+        m_menu->setWindowOpacity(1.0);
 
         if (m_menu->size().isEmpty())
             return;
@@ -121,11 +113,10 @@ private:
         label->setPixmap(m_menu->grab());
         label->setGeometry(ghost->rect());
 
-        auto* effect = new QGraphicsOpacityEffect(ghost);
-        ghost->setGraphicsEffect(effect);
+        ghost->setWindowOpacity(1.0);
         ghost->show();
 
-        auto* anim = new QPropertyAnimation(effect, "opacity", ghost);
+        auto* anim = new QPropertyAnimation(ghost, "windowOpacity", ghost);
         anim->setDuration(120);
         anim->setStartValue(1.0);
         anim->setEndValue(0.0);
@@ -135,8 +126,6 @@ private:
     }
 
     QMenu* m_menu;
-    QWidget* m_anchorBtn;
-    QGraphicsOpacityEffect* m_effect;
     QPointer<QPropertyAnimation> m_posAnim;
     QPointer<QPropertyAnimation> m_opAnim;
 };
@@ -314,6 +303,30 @@ void TopMenuButton::mousePressEvent(QMouseEvent* event)
 {
     // tiny "sinks in" nudge, purely visual, restored on release
     move(pos().x(), pos().y() + 1);
+
+    // Menu is popped up manually (button no longer uses QToolButton's own
+    // InstantPopup) and anchored explicitly right below this button. Letting
+    // QToolButton trigger it itself was landing the dropdown near the top
+    // of the window instead of under the button on this frameless/custom-
+    // titlebar layout; calling popup() ourselves with the correct point
+    // gives Qt the right anchor from the start, so its normal off-screen
+    // handling (flipping above, or scrolling - see PopupCornerFixStyle)
+    // works correctly too instead of us fighting it after the fact.
+    if (m_dropMenu)
+    {
+        if (m_dropMenu->isVisible())
+        {
+            m_dropMenu->hide();
+        }
+        else
+        {
+            setDown(true);
+            m_dropMenu->popup(mapToGlobal(QPoint(0, height())));
+        }
+        event->accept();
+        return;
+    }
+
     QToolButton::mousePressEvent(event);
 }
 
@@ -443,15 +456,14 @@ TopMenuButton* TopMenuBar::addMenuButton(const QString& text, QMenu* menu)
     auto* btn = new TopMenuButton(text, this);
     if (menu)
     {
-        btn->setMenu(menu);
-        new MenuFadeAnimator(menu, btn);
+        btn->setDropMenu(menu);
+        new MenuFadeAnimator(menu);
 
-        // QToolButton keeps itself visually "pressed" (our #topMenuButton:pressed
-        // blue outline) while its menu is open. When that menu gets closed
-        // because the user clicked a *different* top-bar button rather than
-        // this one, Qt doesn't always clear this button's sunken state - the
-        // blue highlight is left stuck on until something else nudges it.
-        // Force it off the moment this menu is gone.
+        // The button sets itself "down" (our #topMenuButton:pressed blue
+        // outline) when it opens its menu. If that menu gets closed because
+        // the user clicked a *different* top-bar button rather than this
+        // one, nothing else would ever clear it - force it off the moment
+        // this menu is gone.
         connect(menu, &QMenu::aboutToHide, btn, [btn]()
         {
             btn->setDown(false);

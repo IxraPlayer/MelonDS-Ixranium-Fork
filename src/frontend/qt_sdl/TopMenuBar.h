@@ -54,6 +54,11 @@ public:
     int baseWidth() const { return m_baseWidth; }
     void setBaseWidth(int w) { m_baseWidth = w; }
 
+    // Menu is opened manually (see mousePressEvent) instead of through
+    // QToolButton's own InstantPopup, so we can hand Qt the correct anchor
+    // point ourselves - see the .cpp for why.
+    void setDropMenu(QMenu* menu) { m_dropMenu = menu; }
+
 protected:
     void enterEvent(MenuBtnEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -66,6 +71,7 @@ signals:
 private:
     int m_baseWidth = 96;
     QPropertyAnimation* m_anim = nullptr;
+    QMenu* m_dropMenu = nullptr;
 
 public:
     // Replaces any in-flight width animation on this button with a new one.
