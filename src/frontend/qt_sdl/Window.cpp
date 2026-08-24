@@ -241,6 +241,8 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 
 
 
+static void updateFramelessWindowMask(QWidget* window);
+
 MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     QMainWindow(parent),
     windowID(id),
@@ -264,14 +266,21 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // minimize/maximize/close buttons match the rest of the panel styling.
     setWindowFlag(Qt::FramelessWindowHint, true);
     // updateFramelessWindowMask() below clips this window to a rounded
-    // QRegion, but without these two attributes Qt fills the full
-    // rectangle with the opaque palette color BEFORE paintEvent()/the mask
-    // apply - so the four corners outside the rounded region stayed solid
-    // black squares. WA_NoSystemBackground skips that autofill;
-    // WA_TranslucentBackground makes the corners genuinely transparent.
-    // (Same fix as SettingsHubDialog - see its constructor for the writeup.)
+    // QRegion so the 4 corners outside it are cut away instead of showing
+    // as solid black squares. WA_TranslucentBackground is required for
+    // the cut-away area to be transparent rather than an opaque color.
+    //
+    // NOTE: unlike SettingsHubDialog, do NOT also set WA_NoSystemBackground
+    // here. That attribute skips Qt's automatic background repaint - for a
+    // QMainWindow that repaint is what actually draws the QSS
+    // "background-color" every frame. Without it, the window content only
+    // gets painted when something happens to trigger a full redraw, so the
+    // custom title bar/menu area intermittently shows the desktop behind
+    // it (looks "randomly transparent") instead of reliably repainting.
+    // WA_TranslucentBackground alone is enough to make the masked-away
+    // corners transparent while keeping normal repaint behavior for
+    // everything inside the mask.
     setAttribute(Qt::WA_TranslucentBackground);
-    setAttribute(Qt::WA_NoSystemBackground);
 
 #if QT_VERSION_MAJOR == 6 && WIN32
     // The "windows11" theme has pretty massive padding around menubar items, this makes Config and Help not fit in a window at 1x screen sizing
@@ -781,6 +790,11 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         setWindowState(windowState() & ~Qt::WindowFullScreen);
     }
     show();
+    // updateFramelessWindowMask() is otherwise only called from
+    // resizeEvent()/moveEvent(), so the very first frame (before either of
+    // those ever fires) used to paint unmasked, square corners. Apply it
+    // once explicitly right after the window is geometry-final and shown.
+    updateFramelessWindowMask(this);
 
     panel = nullptr;
     createScreenPanel();
