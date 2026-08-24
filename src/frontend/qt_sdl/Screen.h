@@ -72,7 +72,7 @@ public:
 
     // Debug overlay (FPS/CPU/RAM), toggled via the hotkey assigned in
     // Settings > Debug settings. Lives on the base ScreenPanel and is
-    // drawn through the shared OSD pipeline (see debugOverlayItem below)
+    // drawn through the shared OSD pipeline (see debugOverlayItems below)
     // so both the native (QPainter) and GL renderers show it identically.
     void setDebugOverlayVisible(bool visible);
     bool debugOverlayVisible() const;
@@ -82,10 +82,8 @@ public:
 private slots:
     void onScreenLayoutChanged();
     void onAutoScreenSizingChanged(int sizing);
-    void updateDebugOverlayText();
 
 protected:
-    QTimer* debugOverlayTimer;
     bool debugOverlayVisible_;
 
 
@@ -156,7 +154,17 @@ protected:
     // thread for the QPainter/native path), so the text is always drawn
     // as part of the same frame that gets presented - no separate
     // surface, no cross-thread race.
-    OSDItem debugOverlayItem;
+    //
+    // One OSDItem per enabled field (not one item with embedded '\n's):
+    // the OSD bitmap-font renderer has no concept of a line break
+    // character - it only wraps text by pixel width - so a '\n' inside
+    // item.text just gets drawn as the "unknown glyph" box. Keeping each
+    // field as its own item and stacking them (y += bitmap.height(), the
+    // same way the regular OSD message list below already does) avoids
+    // that entirely and keeps them cleanly stacked with no gap/box
+    // between them.
+    std::deque<OSDItem> debugOverlayItems;
+    qint64 debugOverlayLastUpdate;
 
     void loadConfig();
 
@@ -184,6 +192,22 @@ protected:
     void osdUpdate();
 
     void calcSplashLayout();
+
+    // Rebuilds debugOverlayItems from the current field mask/values.
+    // Called from within drawScreen()/paintEvent() (see debugOverlayTick()
+    // below), i.e. on whatever thread actually renders this panel -
+    // never via a QTimer, since HK_ToggleDebugOverlay (and therefore
+    // setDebugOverlayVisible()) is handled on EmuThread while a QTimer
+    // created here belongs to the GUI thread. Starting/stopping a QTimer
+    // from a thread other than the one it lives on is undefined by Qt's
+    // own rules (start()/stop() aren't thread-safe across affinities),
+    // so the old QTimer-based version could silently never fire - which
+    // is why the overlay looked permanently frozen after the first paint.
+    void updateDebugOverlayText();
+
+    // Refreshes debugOverlayItems at most once a second. Call this from
+    // the render path itself.
+    void debugOverlayTick();
 };
 
 

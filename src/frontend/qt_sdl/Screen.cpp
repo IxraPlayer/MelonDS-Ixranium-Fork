@@ -113,18 +113,10 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     splashText[2].rendered = false;
     splashText[2].rainbowstart = -1;
 
-    // See the comment on debugOverlayItem in Screen.h for why this is an
-    // OSD-style item instead of a separate QLabel widget.
+    // See the comment on updateDebugOverlayText() in Screen.h for why
+    // there's no QTimer here.
     debugOverlayVisible_ = false;
-    debugOverlayItem.id = 0x80000003; // distinct from splashText ids (0x80000000-2)
-    debugOverlayItem.timestamp = 0;
-    debugOverlayItem.text[0] = '\0';
-    debugOverlayItem.color = 0x30FF30;
-    debugOverlayItem.rendered = false;
-    debugOverlayItem.rainbowstart = -1;
-
-    debugOverlayTimer = new QTimer(this);
-    connect(debugOverlayTimer, &QTimer::timeout, this, &ScreenPanel::updateDebugOverlayText);
+    debugOverlayLastUpdate = 0;
 }
 
 ScreenPanel::~ScreenPanel()
@@ -272,18 +264,18 @@ void ScreenPanel::setDebugOverlayVisible(bool visible)
 
     if (visible)
     {
-        updateDebugOverlayText();
-        debugOverlayTimer->start(1000);
+        // Force an immediate rebuild the next time debugOverlayTick()
+        // runs, instead of waiting up to 1s for the first draw.
+        debugOverlayLastUpdate = 0;
     }
     else
     {
-        debugOverlayTimer->stop();
-
-        // Drop the cached bitmap/texture; it'll be rebuilt from scratch
-        // next time the overlay is turned on.
+        // Drop the cached bitmaps/textures; they'll be rebuilt from
+        // scratch next time the overlay is turned on.
         osdMutex.lock();
-        osdDeleteItem(&debugOverlayItem);
-        debugOverlayItem.rendered = false;
+        for (auto& item : debugOverlayItems)
+            osdDeleteItem(&item);
+        debugOverlayItems.clear();
         osdMutex.unlock();
     }
 }
@@ -291,6 +283,19 @@ void ScreenPanel::setDebugOverlayVisible(bool visible)
 bool ScreenPanel::debugOverlayVisible() const
 {
     return debugOverlayVisible_;
+}
+
+void ScreenPanel::debugOverlayTick()
+{
+    if (!debugOverlayVisible_)
+        return;
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - debugOverlayLastUpdate < 1000)
+        return;
+
+    debugOverlayLastUpdate = now;
+    updateDebugOverlayText();
 }
 
 void ScreenPanel::updateDebugOverlayText()
@@ -348,17 +353,48 @@ void ScreenPanel::updateDebugOverlayText()
     if (lines.isEmpty())
         lines << "Debug overlay: no fields enabled";
 
-    QByteArray utf8 = lines.join("\n").toUtf8();
-
     osdMutex.lock();
-    strncpy(debugOverlayItem.text, utf8.constData(), 255);
-    debugOverlayItem.text[255] = '\0';
-    // Force a re-render (and, on GL, a fresh texture upload) next time
-    // osdUpdate() runs - that happens inside drawScreen()/paintEvent(),
-    // i.e. on the same thread and as part of the same frame that
-    // actually gets presented, so there's no separate surface for the
-    // window server to race against.
-    debugOverlayItem.rendered = false;
+
+    // One item per line, in order. Shrink/grow the list to match the
+    // current field count, then only touch (and mark dirty) the items
+    // whose text actually changed - avoids needless texture re-uploads
+    // on GL for lines that didn't change this tick.
+    while ((int)debugOverlayItems.size() > lines.size())
+    {
+        osdDeleteItem(&debugOverlayItems.back());
+        debugOverlayItems.pop_back();
+    }
+    while ((int)debugOverlayItems.size() < lines.size())
+    {
+        OSDItem item;
+        item.id = 0x80000010 + (unsigned int)debugOverlayItems.size();
+        item.timestamp = 0;
+        item.text[0] = '\0';
+        item.color = 0x30FF30;
+        item.rendered = false;
+        item.rainbowstart = -1;
+        debugOverlayItems.push_back(item);
+    }
+
+    for (int i = 0; i < lines.size(); i++)
+    {
+        QByteArray utf8 = lines[i].toUtf8();
+        OSDItem& item = debugOverlayItems[i];
+
+        if (strncmp(item.text, utf8.constData(), 255) != 0)
+        {
+            strncpy(item.text, utf8.constData(), 255);
+            item.text[255] = '\0';
+            // Force a re-render (and, on GL, a fresh texture upload)
+            // next time osdUpdate()/the debug-overlay draw block runs -
+            // that happens inside drawScreen()/paintEvent(), i.e. on the
+            // same thread and as part of the same frame that actually
+            // gets presented, so there's no separate surface for the
+            // window server to race against.
+            item.rendered = false;
+        }
+    }
+
     osdMutex.unlock();
 }
 
@@ -976,15 +1012,32 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
     if (debugOverlayVisible_)
     {
-        osdMutex.lock();
-        if (!debugOverlayItem.rendered)
-            osdRenderItem(&debugOverlayItem);
+        debugOverlayTick();
 
-        painter.fillRect(QRect(kOSDMargin - 4, kOSDMargin - 2,
-                                debugOverlayItem.bitmap.width() + 8,
-                                debugOverlayItem.bitmap.height() + 4),
-                          QColor(0, 0, 0, 150));
-        painter.drawImage(kOSDMargin, kOSDMargin, debugOverlayItem.bitmap);
+        osdMutex.lock();
+
+        int totalH = 0, maxW = 0;
+        for (auto& item : debugOverlayItems)
+        {
+            if (!item.rendered)
+                osdRenderItem(&item);
+            totalH += item.bitmap.height();
+            maxW = std::max(maxW, item.bitmap.width());
+        }
+
+        if (totalH > 0)
+        {
+            painter.fillRect(QRect(kOSDMargin - 4, kOSDMargin - 2, maxW + 8, totalH + 4),
+                              QColor(0, 0, 0, 150));
+
+            u32 y = kOSDMargin;
+            for (auto& item : debugOverlayItems)
+            {
+                painter.drawImage(kOSDMargin, y, item.bitmap);
+                y += item.bitmap.height();
+            }
+        }
+
         osdMutex.unlock();
     }
 }
@@ -1388,11 +1441,17 @@ void ScreenPanelGL::drawScreen()
 
     if (debugOverlayVisible_)
     {
-        osdMutex.lock();
-        if (!debugOverlayItem.rendered)
-            osdRenderItem(&debugOverlayItem); // GL override uploads the texture; needs the current GL context, which we already have here
+        debugOverlayTick();
 
-        if (osdTextures.count(debugOverlayItem.id))
+        osdMutex.lock();
+
+        for (auto& item : debugOverlayItems)
+        {
+            if (!item.rendered)
+                osdRenderItem(&item); // GL override uploads the texture; needs the current GL context, which we already have here
+        }
+
+        if (!debugOverlayItems.empty())
         {
             glUseProgram(osdShader);
 
@@ -1408,10 +1467,18 @@ void ScreenPanelGL::drawScreen()
             glEnable(GL_BLEND);
             glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
-            glBindTexture(GL_TEXTURE_2D, osdTextures[debugOverlayItem.id]);
-            glUniform2i(osdPosULoc, kOSDMargin, kOSDMargin);
-            glUniform2i(osdSizeULoc, debugOverlayItem.bitmap.width(), debugOverlayItem.bitmap.height());
-            glDrawArrays(GL_TRIANGLES, 0, 2*3);
+            u32 y = kOSDMargin;
+            for (auto& item : debugOverlayItems)
+            {
+                if (osdTextures.count(item.id))
+                {
+                    glBindTexture(GL_TEXTURE_2D, osdTextures[item.id]);
+                    glUniform2i(osdPosULoc, kOSDMargin, y);
+                    glUniform2i(osdSizeULoc, item.bitmap.width(), item.bitmap.height());
+                    glDrawArrays(GL_TRIANGLES, 0, 2*3);
+                }
+                y += item.bitmap.height();
+            }
 
             glDisable(GL_BLEND);
             glUseProgram(0);
