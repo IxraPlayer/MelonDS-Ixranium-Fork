@@ -13,6 +13,10 @@
 #include <QConicalGradient>
 #include <QElapsedTimer>
 #include <QFontMetrics>
+#include <QVariantAnimation>
+#include <QEasingCurve>
+#include <QEnterEvent>
+#include <QResizeEvent>
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
@@ -69,15 +73,60 @@ public:
         auto* t = new QTimer(this);
         connect(t, &QTimer::timeout, this, [this] { update(); });
         t->start(50);
+
+        // Hover "grow" effect: animate the widget's real geometry
+        // (inflated a few px around its own center) rather than a
+        // painter-only scale, so the card doesn't get clipped to its old
+        // bounds by its parent/siblings. QGridLayout only re-asserts a
+        // cell's geometry when the layout itself is invalidated (grid
+        // resize, item add/remove), not continuously, so a plain
+        // setGeometry() call here sticks until then - no layout fighting.
+        scaleAnim = new QVariantAnimation(this);
+        scaleAnim->setDuration(120);
+        scaleAnim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(scaleAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v)
+        {
+            qreal s = v.toReal();
+            QRect base = baseGeometry.isValid() ? baseGeometry : geometry();
+            int dw = int(base.width()  * (s - 1.0));
+            int dh = int(base.height() * (s - 1.0));
+            programmaticResize = true;
+            setGeometry(base.adjusted(-dw / 2, -dh / 2, dw / 2, dh / 2));
+            programmaticResize = false;
+        });
     }
 
 protected:
+    void resizeEvent(QResizeEvent* e) override
+    {
+        QToolButton::resizeEvent(e);
+        if (!programmaticResize)
+            baseGeometry = geometry(); // real layout-driven size/position change - remember it as the "unhovered" rect
+    }
+
+    void enterEvent(QEnterEvent*) override
+    {
+        raise(); // draw over neighboring cards instead of being clipped/overlapped by them
+        scaleAnim->stop();
+        scaleAnim->setStartValue(1.0);
+        scaleAnim->setEndValue(1.08);
+        scaleAnim->start();
+    }
+
+    void leaveEvent(QEvent*) override
+    {
+        scaleAnim->stop();
+        scaleAnim->setStartValue(1.08);
+        scaleAnim->setEndValue(1.0);
+        scaleAnim->start();
+    }
+
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
 
-        const qreal radius = 0.0;
+        const qreal radius = 14.0;
         QRectF r = rect().adjusted(0.75, 0.75, -0.75, -0.75);
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
@@ -152,6 +201,9 @@ protected:
 private:
     bool isAddTile;
     QElapsedTimer glowClock;
+    QVariantAnimation* scaleAnim = nullptr;
+    QRect baseGeometry;
+    bool programmaticResize = false;
 };
 
 using namespace melonDS;
