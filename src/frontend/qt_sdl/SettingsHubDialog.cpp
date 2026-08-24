@@ -1,4 +1,5 @@
 #include "SettingsHubDialog.h"
+#include "CustomTitleBar.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -12,48 +13,25 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 
-namespace
-{
-    // Thin drag strip along the top so the now-frameless dialog can still
-    // be repositioned - same startSystemMove() approach CustomTitleBar
-    // uses for the main window, just without the min/max/close buttons
-    // (closing happens via the existing "Close" button at the bottom).
-    class SettingsDragStrip : public QWidget
-    {
-    public:
-        explicit SettingsDragStrip(QWidget* parent) : QWidget(parent)
-        {
-            setFixedHeight(30);
-            auto* l = new QHBoxLayout(this);
-            l->setContentsMargins(16, 0, 0, 0);
-            auto* label = new QLabel(QObject::tr("Settings"), this);
-            label->setStyleSheet("QLabel { color: rgba(255,255,255,190); font-size: 12px; "
-                                  "font-weight: bold; background: transparent; }");
-            l->addWidget(label);
-            l->addStretch();
-        }
-
-    protected:
-        void mousePressEvent(QMouseEvent* event) override
-        {
-            if (event->button() == Qt::LeftButton && window()->windowHandle())
-                window()->windowHandle()->startSystemMove();
-        }
-    };
-}
-
 SettingsHubDialog::SettingsHubDialog(QWidget* parent) : QDialog(parent)
 {
     setWindowTitle("Settings");
     setMinimumSize(680, 480);
 
+    // Frameless dialog: the OS decorations are dropped entirely and
+    // CustomTitleBar (the same widget the main window uses) draws our own
+    // titlebar with working minimize/maximize/close buttons plus drag-to-move.
     setWindowFlag(Qt::FramelessWindowHint, true);
 
     auto* outerV = new QVBoxLayout(this);
     outerV->setContentsMargins(0, 0, 0, 0);
     outerV->setSpacing(0);
 
-    outerV->addWidget(new SettingsDragStrip(this));
+    titleBar = new CustomTitleBar(this, this);
+    titleBar->setTitleText(tr("Settings"));
+    outerV->addWidget(titleBar);
+
+    resizeGrips = new WindowResizeGrips(this);
 
     auto* root = new QHBoxLayout();
     root->setContentsMargins(0, 0, 0, 0);
@@ -116,6 +94,8 @@ void SettingsHubDialog::paintEvent(QPaintEvent*)
 void SettingsHubDialog::resizeEvent(QResizeEvent* event)
 {
     QDialog::resizeEvent(event);
+    if (resizeGrips) resizeGrips->updateGeometry();
+    if (titleBar) titleBar->refreshMaximizeGlyph();
 }
 
 void SettingsHubDialog::showEvent(QShowEvent* event)

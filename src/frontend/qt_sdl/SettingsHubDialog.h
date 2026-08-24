@@ -6,6 +6,9 @@
 #include <QStackedWidget>
 #include <QScrollArea>
 
+class CustomTitleBar;
+class WindowResizeGrips;
+
 class SettingsHubDialog : public QDialog
 {
     Q_OBJECT
@@ -37,6 +40,8 @@ private:
     QStackedWidget* stack;
     QScrollArea* stackScroll;
     QWidget* placeholder;
+    CustomTitleBar* titleBar;
+    WindowResizeGrips* resizeGrips;
 };
 
 #endif

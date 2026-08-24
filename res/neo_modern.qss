@@ -8,7 +8,7 @@ QWidget {
 QMainWindow, QDialog {
     background-color: rgba(11, 12, 16, 235);
     border: 1px solid #20232c;
-    border-radius: 18px;
+    border-radius: 0;
 }
 
 QDialog QTabWidget::pane {
