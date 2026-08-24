@@ -29,7 +29,89 @@
 #include <QRandomGenerator>
 #include <QPixmap>
 #include <QResizeEvent>
+#include <QGraphicsOpacityEffect>
+#include <QLabel>
+#include <QEvent>
 #include <cmath>
+
+// Fades+slides a QMenu dropdown in on open. Closing a real QMenu can't be
+// delayed the way a top-level window's closeEvent can (its exec() loop
+// quits the moment it's actually hidden, and ignoring hideEvent doesn't
+// stop a popup from closing), so the close animation is faked: grab a
+// screenshot of the menu right before it really hides, show that image in
+// a tiny borrowed overlay at the same spot, and fade the overlay out while
+// the real menu disappears instantly underneath it.
+class MenuFadeAnimator : public QObject
+{
+public:
+    explicit MenuFadeAnimator(QMenu* menu) : QObject(menu), m_menu(menu)
+    {
+        m_effect = new QGraphicsOpacityEffect(menu);
+        m_effect->setOpacity(1.0);
+        menu->setGraphicsEffect(m_effect);
+        menu->installEventFilter(this);
+        connect(menu, &QMenu::aboutToHide, this, &MenuFadeAnimator::showGhost);
+    }
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override
+    {
+        if (obj == m_menu && event->type() == QEvent::Show)
+        {
+            const QPoint finalPos = m_menu->pos();
+            m_menu->move(finalPos.x(), finalPos.y() - 8);
+            m_effect->setOpacity(0.0);
+
+            auto* posAnim = new QPropertyAnimation(m_menu, "pos", m_menu);
+            posAnim->setDuration(150);
+            posAnim->setStartValue(QPoint(finalPos.x(), finalPos.y() - 8));
+            posAnim->setEndValue(finalPos);
+            posAnim->setEasingCurve(QEasingCurve::OutCubic);
+            posAnim->start(QAbstractAnimation::DeleteWhenStopped);
+
+            auto* opAnim = new QPropertyAnimation(m_effect, "opacity", m_menu);
+            opAnim->setDuration(150);
+            opAnim->setStartValue(0.0);
+            opAnim->setEndValue(1.0);
+            opAnim->setEasingCurve(QEasingCurve::OutCubic);
+            opAnim->start(QAbstractAnimation::DeleteWhenStopped);
+        }
+        return false;
+    }
+
+private:
+    void showGhost()
+    {
+        if (m_menu->size().isEmpty())
+            return;
+
+        auto* ghost = new QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint
+                                            | Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
+        ghost->setAttribute(Qt::WA_TranslucentBackground);
+        ghost->setAttribute(Qt::WA_ShowWithoutActivating);
+        ghost->setAttribute(Qt::WA_DeleteOnClose);
+        ghost->setGeometry(m_menu->geometry());
+
+        auto* label = new QLabel(ghost);
+        label->setPixmap(m_menu->grab());
+        label->setGeometry(ghost->rect());
+
+        auto* effect = new QGraphicsOpacityEffect(ghost);
+        ghost->setGraphicsEffect(effect);
+        ghost->show();
+
+        auto* anim = new QPropertyAnimation(effect, "opacity", ghost);
+        anim->setDuration(120);
+        anim->setStartValue(1.0);
+        anim->setEndValue(0.0);
+        anim->setEasingCurve(QEasingCurve::InCubic);
+        connect(anim, &QPropertyAnimation::finished, ghost, &QWidget::close);
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+
+    QMenu* m_menu;
+    QGraphicsOpacityEffect* m_effect;
+};
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -332,7 +414,10 @@ TopMenuButton* TopMenuBar::addMenuButton(const QString& text, QMenu* menu)
 {
     auto* btn = new TopMenuButton(text, this);
     if (menu)
+    {
         btn->setMenu(menu);
+        new MenuFadeAnimator(menu);
+    }
 
     auto* layout = static_cast<QHBoxLayout*>(this->layout());
     // insert right before the trailing stretch (last item)

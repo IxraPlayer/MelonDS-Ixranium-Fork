@@ -630,6 +630,17 @@ void LibraryScreen::addGame(const QString& path)
     connect(tile, &QToolButton::customContextMenuRequested, this, [this, tile, path](const QPoint& pos)
     {
         QMenu menu(tile);
+        // Global popup fix (PopupCornerFixStyle) marks every QMenu
+        // translucent so rounded corners don't show as black squares, which
+        // left this one see-through in the middle too since it never had an
+        // opaque background of its own. Give it a solid painted panel so it
+        // reads as matte while keeping the rounded corners.
+        menu.setAttribute(Qt::WA_TranslucentBackground, true);
+        menu.setStyleSheet(
+            "QMenu { background: rgba(24,26,34,255); border: 1px solid rgba(255,255,255,30); "
+            "  border-radius: 8px; padding: 4px; color: white; }"
+            "QMenu::item { padding: 6px 14px; border-radius: 5px; }"
+            "QMenu::item:selected { background: rgba(255,255,255,35); }");
         QAction* removeAct = menu.addAction("Remove from library");
         QAction* chosen = menu.exec(tile->mapToGlobal(pos));
         if (chosen == removeAct)
