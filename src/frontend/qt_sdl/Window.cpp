@@ -241,8 +241,6 @@ static bool FileIsSupportedFiletype(const QString& filename, bool insideArchive 
 
 
 
-static void updateFramelessWindowMask(QWidget* window);
-
 MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     QMainWindow(parent),
     windowID(id),
@@ -265,21 +263,33 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // Custom title bar: drop the OS decorations and draw our own so the
     // minimize/maximize/close buttons match the rest of the panel styling.
     setWindowFlag(Qt::FramelessWindowHint, true);
-    // updateFramelessWindowMask() below clips this window to a rounded
-    // QRegion so the 4 corners outside it are cut away instead of showing
-    // as solid black squares. WA_TranslucentBackground is required for
-    // the cut-away area to be transparent rather than an opaque color.
+    // Real root cause of both the black-square corners AND the top area
+    // occasionally going fully see-through: QMainWindow is NOT one of the
+    // Qt widget classes whose QSS background/border-radius is guaranteed
+    // to be repainted on every frame automatically (unlike QDialog/QMenu,
+    // which is why SettingsHubDialog never needed this). Without
+    // WA_StyledBackground, that rounded background paint only happens
+    // opportunistically - fine most of the time, but on this Wayland setup
+    // it was sometimes skipped entirely, leaving either the raw square
+    // surface (black, pre-translucency) or, once translucent, nothing at
+    // all painted there (see-through to the desktop). WA_StyledBackground
+    // forces the QSS panel (fill + rounded border) to be redrawn every
+    // single paint event, which is what actually fixes both symptoms.
+    setAttribute(Qt::WA_StyledBackground, true);
+    // WA_TranslucentBackground makes anything the style engine does NOT
+    // paint (i.e. the 4 corners outside the QSS border-radius curve)
+    // genuinely transparent instead of opaque black.
     //
-    // NOTE: unlike SettingsHubDialog, do NOT also set WA_NoSystemBackground
-    // here. That attribute skips Qt's automatic background repaint - for a
-    // QMainWindow that repaint is what actually draws the QSS
-    // "background-color" every frame. Without it, the window content only
-    // gets painted when something happens to trigger a full redraw, so the
-    // custom title bar/menu area intermittently shows the desktop behind
-    // it (looks "randomly transparent") instead of reliably repainting.
-    // WA_TranslucentBackground alone is enough to make the masked-away
-    // corners transparent while keeping normal repaint behavior for
-    // everything inside the mask.
+    // NOTE: we deliberately do NOT use setMask()/QRegion window-shape
+    // clipping here (an earlier version of this fix did). QWidget::setMask()
+    // is an X11-era mechanism that Wayland compositors are not required to
+    // honor, and on this system it was applying inconsistently - which is
+    // what caused corners to still show square in some spots even after a
+    // resize. With WA_StyledBackground reliably painting only the rounded
+    // shape, no shape masking is needed for the visual result; the only
+    // trade-off is that a maximized/full-screen window will show slightly
+    // rounded corners at the screen edge instead of hard-cut square ones,
+    // which is a minor cosmetic detail rather than a bug.
     setAttribute(Qt::WA_TranslucentBackground);
 
 #if QT_VERSION_MAJOR == 6 && WIN32
@@ -790,11 +800,6 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         setWindowState(windowState() & ~Qt::WindowFullScreen);
     }
     show();
-    // updateFramelessWindowMask() is otherwise only called from
-    // resizeEvent()/moveEvent(), so the very first frame (before either of
-    // those ever fires) used to paint unmasked, square corners. Apply it
-    // once explicitly right after the window is geometry-final and shown.
-    updateFramelessWindowMask(this);
 
     panel = nullptr;
     createScreenPanel();
@@ -2797,32 +2802,18 @@ void MainWindow::toggleFullscreen()
     if (resizeGrips) resizeGrips->updateGeometry();
 }
 
-// The frameless window's real backing rectangle is square; without clipping
-// it to the rounded shape the .qss paints (border-radius: 18 on
-// QMainWindow), the true square corners peek out from behind the painted
-// rounded ones and read as a thin mismatched frame around the whole app.
-// Applying a rounded QRegion mask actually clips the window to that shape
-// instead of just painting over it. Skipped while maximized/fullscreen,
-// where the window fills the screen edge to edge with square corners.
-static void updateFramelessWindowMask(QWidget* window)
-{
-    if (window->isMaximized() || window->isFullScreen())
-    {
-        window->clearMask();
-        return;
-    }
-
-    const int radius = 18;
-    QPainterPath path;
-    path.addRoundedRect(window->rect(), radius, radius);
-    window->setMask(QRegion(path.toFillPolygon().toPolygon()));
-}
-
+// NOTE: this app previously clipped the frameless window to a rounded
+// QRegion via setMask() here to hide the square backing rectangle's real
+// corners. That's an X11-era mechanism Wayland compositors aren't required
+// to honor, and on this system it applied inconsistently, which is what
+// caused some corners to stay square. It's been removed in favor of
+// MainWindow's WA_StyledBackground (see constructor) reliably painting
+// only the QSS rounded shape every frame - no window-shape clipping
+// needed for the visual result.
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
     if (resizeGrips) resizeGrips->updateGeometry();
-    updateFramelessWindowMask(this);
     positionTopMenuRestoreBtn();
     if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
 }
@@ -3064,7 +3055,6 @@ void MainWindow::changeEvent(QEvent* event)
     {
         if (titleBar) titleBar->refreshMaximizeGlyph();
         if (resizeGrips) resizeGrips->updateGeometry();
-        updateFramelessWindowMask(this);
     }
 }
 
