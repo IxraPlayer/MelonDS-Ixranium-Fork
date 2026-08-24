@@ -113,7 +113,21 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
     splashText[2].rendered = false;
     splashText[2].rainbowstart = -1;
 
-    debugOverlayLabel = new QLabel(this);
+    // This panel paints straight to a native window surface
+    // (WA_PaintOnScreen / WA_NativeWindow, set further down for the GL/
+    // software renderers), which bypasses Qt's normal widget compositing.
+    // A plain child QLabel can't reliably show *on top* of that: Qt keeps
+    // repainting the native surface directly at the OS level regardless
+    // of the label's Z-order, so new text only became visible for a
+    // moment right when the overlay was toggled (a fresh raise/repaint)
+    // and then got instantly covered again by the next native frame --
+    // looking "frozen" even though the numbers were updating underneath.
+    // Making it a genuine separate top-level window (own OS-level
+    // surface, kept positioned over this panel) sidesteps that entirely.
+    debugOverlayLabel = new QLabel(nullptr, Qt::Tool | Qt::FramelessWindowHint |
+                                             Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
+    debugOverlayLabel->setAttribute(Qt::WA_ShowWithoutActivating);
+    debugOverlayLabel->setAttribute(Qt::WA_TranslucentBackground);
     debugOverlayLabel->setObjectName("debugOverlayLabel");
     debugOverlayLabel->setStyleSheet(
         "QLabel#debugOverlayLabel {"
@@ -125,9 +139,7 @@ ScreenPanel::ScreenPanel(QWidget* parent) : QWidget(parent)
         "  border-radius: 4px;"
         "}");
     debugOverlayLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    debugOverlayLabel->move(8, 8);
     debugOverlayLabel->hide();
-    debugOverlayLabel->raise();
 
     debugOverlayTimer = new QTimer(this);
     connect(debugOverlayTimer, &QTimer::timeout, this, &ScreenPanel::updateDebugOverlayText);
@@ -137,6 +149,11 @@ ScreenPanel::~ScreenPanel()
 {
     mouseTimer->stop();
     delete mouseTimer;
+
+    // debugOverlayLabel is now a parent-less top-level window (see the
+    // constructor comment), so Qt won't delete it automatically along
+    // with this panel the way a normal child widget would be.
+    delete debugOverlayLabel;
 }
 
 void ScreenPanel::loadConfig()
@@ -269,13 +286,16 @@ void ScreenPanel::onAutoScreenSizingChanged(int sizing)
 void ScreenPanel::resizeEvent(QResizeEvent* event)
 {
     setupScreenLayout();
-    if (debugOverlayLabel)
-    {
-        debugOverlayLabel->adjustSize();
-        debugOverlayLabel->move(8, 8);
-        debugOverlayLabel->raise();
-    }
+    if (debugOverlayLabel && debugOverlayLabel->isVisible())
+        debugOverlayLabel->move(mapToGlobal(QPoint(8, 8)));
     QWidget::resizeEvent(event);
+}
+
+void ScreenPanel::moveEvent(QMoveEvent* event)
+{
+    if (debugOverlayLabel && debugOverlayLabel->isVisible())
+        debugOverlayLabel->move(mapToGlobal(QPoint(8, 8)));
+    QWidget::moveEvent(event);
 }
 
 void ScreenPanel::setDebugOverlayVisible(bool visible)
@@ -283,6 +303,7 @@ void ScreenPanel::setDebugOverlayVisible(bool visible)
     if (visible)
     {
         updateDebugOverlayText();
+        debugOverlayLabel->move(mapToGlobal(QPoint(8, 8)));
         debugOverlayLabel->show();
         debugOverlayLabel->raise();
         debugOverlayTimer->start(1000);
@@ -356,13 +377,11 @@ void ScreenPanel::updateDebugOverlayText()
 
     debugOverlayLabel->setText(lines.join("\n"));
     debugOverlayLabel->adjustSize();
-    // The label sits on top of a continuously-repainting (GL) surface, so
-    // just changing its text isn't enough to guarantee it stays visible
-    // above the game frame -- previously only toggling the overlay
-    // on/off explicitly raised+repainted it, which is why the numbers
-    // looked frozen except right after a toggle. Do that every tick too.
-    debugOverlayLabel->raise();
-    debugOverlayLabel->update();
+    // debugOverlayLabel is now its own top-level always-on-top window (see
+    // the constructor comment), so it just needs to be kept positioned
+    // over this panel -- it no longer relies on Qt's child-widget Z-order,
+    // which is what was silently failing before.
+    debugOverlayLabel->move(mapToGlobal(QPoint(8, 8)));
 }
 
 void ScreenPanel::mousePressEvent(QMouseEvent* event)
