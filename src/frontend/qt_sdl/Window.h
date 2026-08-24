@@ -109,6 +109,7 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
     // On Windows, a Qt::FramelessWindowHint window that gets maximized via
     // the OS (snap, taskbar, our own restore/maximize button) still has

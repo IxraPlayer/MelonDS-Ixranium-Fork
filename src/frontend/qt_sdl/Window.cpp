@@ -263,34 +263,30 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // Custom title bar: drop the OS decorations and draw our own so the
     // minimize/maximize/close buttons match the rest of the panel styling.
     setWindowFlag(Qt::FramelessWindowHint, true);
-    // Real root cause of both the black-square corners AND the top area
-    // occasionally going fully see-through: QMainWindow is NOT one of the
-    // Qt widget classes whose QSS background/border-radius is guaranteed
-    // to be repainted on every frame automatically (unlike QDialog/QMenu,
-    // which is why SettingsHubDialog never needed this). Without
-    // WA_StyledBackground, that rounded background paint only happens
-    // opportunistically - fine most of the time, but on this Wayland setup
-    // it was sometimes skipped entirely, leaving either the raw square
-    // surface (black, pre-translucency) or, once translucent, nothing at
-    // all painted there (see-through to the desktop). WA_StyledBackground
-    // forces the QSS panel (fill + rounded border) to be redrawn every
-    // single paint event, which is what actually fixes both symptoms.
-    setAttribute(Qt::WA_StyledBackground, true);
-    // WA_TranslucentBackground makes anything the style engine does NOT
-    // paint (i.e. the 4 corners outside the QSS border-radius curve)
-    // genuinely transparent instead of opaque black.
+    // Both previous attempts at this (setMask() clipping, then
+    // WA_TranslucentBackground) assumed the desktop compositor blends
+    // per-pixel window transparency correctly. On this system it doesn't
+    // reliably: without an active compositing manager (common on
+    // lightweight setups like this one), pixels Qt marks as "transparent"
+    // don't get blended against the desktop at all - they render as
+    // whatever garbage/black was already in that buffer, and which pixels
+    // that affects varies frame to frame. That's the actual cause of both
+    // "still square in some spots" and "top bar suddenly went fully
+    // see-through": we were relying on a blending step that this system
+    // isn't guaranteed to perform.
     //
-    // NOTE: we deliberately do NOT use setMask()/QRegion window-shape
-    // clipping here (an earlier version of this fix did). QWidget::setMask()
-    // is an X11-era mechanism that Wayland compositors are not required to
-    // honor, and on this system it was applying inconsistently - which is
-    // what caused corners to still show square in some spots even after a
-    // resize. With WA_StyledBackground reliably painting only the rounded
-    // shape, no shape masking is needed for the visual result; the only
-    // trade-off is that a maximized/full-screen window will show slightly
-    // rounded corners at the screen edge instead of hard-cut square ones,
-    // which is a minor cosmetic detail rather than a bug.
-    setAttribute(Qt::WA_TranslucentBackground);
+    // So: give up on real per-pixel transparency for this window entirely.
+    // paintEvent() below unconditionally fills the *entire* rectangle -
+    // corners included - with an opaque color matching the QSS panel's own
+    // near-black background before the QSS rounded panel draws on top of
+    // it. The true (square) corners are still there physically, but since
+    // their fill color is indistinguishable from the panel's own
+    // background, there's nothing left to visually read as a "black
+    // square" - the rounded QSS border is what your eye follows, so it
+    // still reads as a rounded window. This has zero dependency on
+    // compositing, masking, or WA_StyledBackground timing, so it can't
+    // regress the same way again.
+    setAttribute(Qt::WA_StyledBackground, true);
 
 #if QT_VERSION_MAJOR == 6 && WIN32
     // The "windows11" theme has pretty massive padding around menubar items, this makes Config and Help not fit in a window at 1x screen sizing
@@ -2810,6 +2806,20 @@ void MainWindow::toggleFullscreen()
 // MainWindow's WA_StyledBackground (see constructor) reliably painting
 // only the QSS rounded shape every frame - no window-shape clipping
 // needed for the visual result.
+void MainWindow::paintEvent(QPaintEvent* event)
+{
+    // See the WA_StyledBackground comment in the constructor: fill the
+    // whole rectangle - true square corners included - with a color that
+    // matches the QSS panel background, so there's no visible seam/black
+    // square regardless of whether real per-pixel transparency works on
+    // this system. This runs first; the base implementation (below) then
+    // lets the QSS-styled rounded panel/border draw on top of it via
+    // WA_StyledBackground.
+    QPainter p(this);
+    p.fillRect(rect(), QColor(16, 18, 23));
+    QMainWindow::paintEvent(event);
+}
+
 void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
