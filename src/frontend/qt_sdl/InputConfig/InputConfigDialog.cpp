@@ -132,6 +132,9 @@ void InputConfigDialog::setupKeypadPage()
         // keypadKeyMap[i], so we can just keep the button by index for control presets.
         keypadKeyButtons[i] = keyMapButtonKey;
 
+        connect(keyMapButtonKey, &KeyMapButton::mappingChanged, this, &InputConfigDialog::commitAndSave);
+        connect(keyMapButtonJoy, &JoyMapButton::mappingChanged, this, &InputConfigDialog::commitAndSave);
+
         if (ui->cbxJoystick->isEnabled())
         {
             ui->stackMapping->setCurrentIndex(1);
@@ -191,73 +194,18 @@ void InputConfigDialog::on_cbxControlPreset_currentIndexChanged(int idx)
     for (KeyMapButton* btn : keypadKeyButtons)
         if (btn) btn->refresh();
 
-    // Write straight through to config instead of waiting for OK: picking a
-    // preset is a decisive action on its own, and previously it only lived
-    // in this dialog's in-memory arrays, so it was lost if the dialog was
-    // closed any way other than clicking OK (Esc, Cancel, the X button...).
-    Config::Table& instcfg = emuInstance->getLocalConfig();
-    Config::Table keycfg = instcfg.GetTable("Keyboard");
-    for (int k = 0; k < keypad_num; k++)
-    {
-        const char* btn = EmuInstance::buttonNames[dskeyorder[k]];
-        keycfg.SetInt(btn, keypadKeyMap[k]);
-    }
-    Config::Save();
-    emuInstance->inputLoadConfig();
+    // Picking a preset is a decisive action on its own; commit it straight
+    // through rather than waiting for OK.
+    commitAndSave();
 }
 
-void InputConfigDialog::populatePage(QWidget* page,
-    const std::initializer_list<const char*>& labels,
-    int* keymap, int* joymap)
-{
-    // kind of a hack
-    bool ishotkey = (page != ui->tabInput);
-
-    QHBoxLayout* main_layout = new QHBoxLayout();
-
-    QGroupBox* group;
-    QGridLayout* group_layout;
-
-    group = new QGroupBox("Keyboard mappings:");
-    main_layout->addWidget(group);
-    group_layout = new QGridLayout();
-    group_layout->setSpacing(1);
-    int i = 0;
-    for (const char* labelStr : labels)
-    {
-        QLabel* label = new QLabel(QString(labelStr)+":");
-        KeyMapButton* btn = new KeyMapButton(&keymap[i], ishotkey);
-
-        group_layout->addWidget(label, i, 0);
-        group_layout->addWidget(btn, i, 1);
-        i++;
-    }
-    group_layout->setRowStretch(labels.size(), 1);
-    group->setLayout(group_layout);
-    group->setMinimumWidth(275);
-
-    group = new QGroupBox("Joystick mappings:");
-    main_layout->addWidget(group);
-    group_layout = new QGridLayout();
-    group_layout->setSpacing(1);
-    i = 0;
-    for (const char* labelStr : labels)
-    {
-        QLabel* label = new QLabel(QString(labelStr)+":");
-        JoyMapButton* btn = new JoyMapButton(&joymap[i], ishotkey);
-
-        group_layout->addWidget(label, i, 0);
-        group_layout->addWidget(btn, i, 1);
-        i++;
-    }
-    group_layout->setRowStretch(labels.size(), 1);
-    group->setLayout(group_layout);
-    group->setMinimumWidth(275);
-
-    page->setLayout(main_layout);
-}
-
-void InputConfigDialog::on_InputConfigDialog_accepted()
+// Writes every mapping array (keypad, addon hotkeys, general hotkeys, both
+// keyboard and joystick sides, plus the selected joystick device) straight
+// through to config and saves immediately. Called after every individual
+// mapping change (button capture, clear, preset pick) rather than only on
+// OK, so nothing is lost if the dialog is closed via Cancel/Esc/X - those
+// used to discard any manual remap that wasn't a full preset pick.
+void InputConfigDialog::commitAndSave()
 {
     Config::Table& instcfg = emuInstance->getLocalConfig();
     Config::Table keycfg = instcfg.GetTable("Keyboard");
@@ -292,12 +240,75 @@ void InputConfigDialog::on_InputConfigDialog_accepted()
     Config::Save();
 
     emuInstance->inputLoadConfig();
+}
 
+void InputConfigDialog::populatePage(QWidget* page,
+    const std::initializer_list<const char*>& labels,
+    int* keymap, int* joymap)
+{
+    // kind of a hack
+    bool ishotkey = (page != ui->tabInput);
+
+    QHBoxLayout* main_layout = new QHBoxLayout();
+
+    QGroupBox* group;
+    QGridLayout* group_layout;
+
+    group = new QGroupBox("Keyboard mappings:");
+    main_layout->addWidget(group);
+    group_layout = new QGridLayout();
+    group_layout->setSpacing(1);
+    int i = 0;
+    for (const char* labelStr : labels)
+    {
+        QLabel* label = new QLabel(QString(labelStr)+":");
+        KeyMapButton* btn = new KeyMapButton(&keymap[i], ishotkey);
+        connect(btn, &KeyMapButton::mappingChanged, this, &InputConfigDialog::commitAndSave);
+
+        group_layout->addWidget(label, i, 0);
+        group_layout->addWidget(btn, i, 1);
+        i++;
+    }
+    group_layout->setRowStretch(labels.size(), 1);
+    group->setLayout(group_layout);
+    group->setMinimumWidth(275);
+
+    group = new QGroupBox("Joystick mappings:");
+    main_layout->addWidget(group);
+    group_layout = new QGridLayout();
+    group_layout->setSpacing(1);
+    i = 0;
+    for (const char* labelStr : labels)
+    {
+        QLabel* label = new QLabel(QString(labelStr)+":");
+        JoyMapButton* btn = new JoyMapButton(&joymap[i], ishotkey);
+        connect(btn, &JoyMapButton::mappingChanged, this, &InputConfigDialog::commitAndSave);
+
+        group_layout->addWidget(label, i, 0);
+        group_layout->addWidget(btn, i, 1);
+        i++;
+    }
+    group_layout->setRowStretch(labels.size(), 1);
+    group->setLayout(group_layout);
+    group->setMinimumWidth(275);
+
+    page->setLayout(main_layout);
+}
+
+void InputConfigDialog::on_InputConfigDialog_accepted()
+{
+    // Every mapping change already committed itself the moment it happened
+    // (see commitAndSave), so OK just needs to persist the joystick device
+    // choice and close - one final commit covers that.
+    commitAndSave();
     closeDlg();
 }
 
 void InputConfigDialog::on_InputConfigDialog_rejected()
 {
+    // All mapping edits made during this dialog session were already saved
+    // live as they happened, so Cancel/Esc/X only restores the joystick
+    // device selection rather than discarding remaps like it used to.
     Config::Table& instcfg = emuInstance->getLocalConfig();
     emuInstance->setJoystick(instcfg.GetInt("JoystickID"));
 

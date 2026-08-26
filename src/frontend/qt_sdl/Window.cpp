@@ -1045,14 +1045,13 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
     // In-game keyboard mapping preview (bottom-right corner), independent of
     // the pause menu's own copy - toggled from View > Show keyboard preview.
-    liveKeyboardPreview = new KeyboardPreviewWidget(nullptr);
-    liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    liveKeyboardPreview = new KeyboardPreviewWidget(this);
     liveKeyboardPreview->setAttribute(Qt::WA_TranslucentBackground);
-    liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents); // click-through, purely visual
-    liveKeyboardPreview->setAttribute(Qt::WA_ShowWithoutActivating);
+    liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
     liveKeyboardPreview->setFixedSize(400, 140);
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     positionLiveKeyboardPreview();
+    liveKeyboardPreview->raise();
     liveKeyboardPreview->setVisible(showKeyboardPreview);
 }
 
@@ -3099,9 +3098,9 @@ void MainWindow::moveEvent(QMoveEvent* event)
 void MainWindow::positionLiveKeyboardPreview()
 {
     if (!liveKeyboardPreview) return;
-    QPoint corner = mapToGlobal(QPoint(width() - liveKeyboardPreview->width() - 16,
-                                        height() - liveKeyboardPreview->height() - 16));
-    liveKeyboardPreview->move(corner);
+    liveKeyboardPreview->move(width() - liveKeyboardPreview->width() - 16,
+                               height() - liveKeyboardPreview->height() - 16);
+    liveKeyboardPreview->raise();
 }
 
 #ifdef Q_OS_WIN
@@ -3402,6 +3401,7 @@ void MainWindow::onEmuStart()
 {
     showingLibrary = false;
     if (centralStack) centralStack->setCurrentWidget(panel);
+    if (liveKeyboardPreview) liveKeyboardPreview->raise();
 #if defined(Q_OS_WIN)
     // See createScreenPanel() for why this is needed on Windows only.
     if (library) library->setVisible(false);
@@ -3441,6 +3441,7 @@ void MainWindow::onEmuStop()
 {
     showingLibrary = true;
     if (centralStack) centralStack->setCurrentWidget(library);
+    if (liveKeyboardPreview) liveKeyboardPreview->raise();
 #if defined(Q_OS_WIN)
     // See createScreenPanel() for why this is needed on Windows only.
     if (panel) panel->setVisible(false);

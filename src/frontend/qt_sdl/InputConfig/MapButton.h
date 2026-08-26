@@ -32,6 +32,12 @@ class KeyMapButton : public QPushButton
 {
     Q_OBJECT
 
+signals:
+    // Fired right after *mapping is written by the user (capture or clear),
+    // so the owning dialog can commit+save immediately instead of relying
+    // on OK being clicked - matches how control presets already behave.
+    void mappingChanged();
+
 public:
     KeyMapButton(int* mapping, bool hotkey) : QPushButton()
     {
@@ -75,7 +81,7 @@ protected:
         if (!mod)
         {
             if (key == Qt::Key_Escape) { click(); return; }
-            if (key == Qt::Key_Backspace) { *mapping = -1; click(); return; }
+            if (key == Qt::Key_Backspace) { *mapping = -1; click(); emit mappingChanged(); return; }
         }
 
         if (isHotkey)
@@ -91,6 +97,7 @@ protected:
 
         *mapping = key;
         click();
+        emit mappingChanged();
     }
 
     void focusOutEvent(QFocusEvent* event) override
@@ -166,6 +173,10 @@ class JoyMapButton : public QPushButton
 {
     Q_OBJECT
 
+signals:
+    // See KeyMapButton::mappingChanged.
+    void mappingChanged();
+
 public:
     JoyMapButton(int* mapping, bool hotkey) : QPushButton()
     {
@@ -213,7 +224,7 @@ protected:
         if (!mod)
         {
             if (key == Qt::Key_Escape) { click(); return; }
-            if (key == Qt::Key_Backspace) { *mapping = -1; click(); return; }
+            if (key == Qt::Key_Backspace) { *mapping = -1; click(); emit mappingChanged(); return; }
         }
     }
 
@@ -245,6 +256,7 @@ protected:
             {
                 *mapping = (oldmap & 0xFFFF0000) | i;
                 click();
+                emit mappingChanged();
                 return;
             }
         }
@@ -263,6 +275,7 @@ protected:
 
                 *mapping = (oldmap & 0xFFFF0000) | 0x100 | blackhat | (i << 4);
                 click();
+                emit mappingChanged();
                 return;
             }
         }
@@ -290,6 +303,7 @@ protected:
                 }
 
                 click();
+                emit mappingChanged();
                 return;
             }
         }
