@@ -364,21 +364,27 @@ using namespace melonDS;
 int LibraryScreen::AccentHueShift = 0;
 
 // Maps a saved "UIQSSTheme" name to the hue rotation (in degrees) that
-// turns the built-in turquoise/blue accent colors into the matching
-// Ixranium color. Deltas are measured from the panel-theme accent blue
-// (#3d5afe, hue ~223°) to each target hue used by the ixranium_*.qss
-// files (red 0°, green 130°, purple 280°) so the main screen and the
-// side-panel widgets always agree on which color is selected.
+// turns the built-in turquoise accent colors (base hue ~180 deg) into the
+// matching Ixranium theme color. Deltas are measured directly from that
+// turquoise base to each theme's actual accent hue, as sampled from its
+// .qss (red #fe573d ~8 deg, green #3dfe77 ~138 deg, purple #d73dfe ~288
+// deg, blue #3d5afe ~231 deg). The old deltas were measured from the blue
+// accent instead of from the library's own turquoise base, which is why
+// blue theme's library screen stayed turquoise instead of turning blue,
+// and why red/green/purple all landed on visibly different hues than
+// their settings menus.
 void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
 {
     if (qssThemeName == "ixranium_red")
-        AccentHueShift = 137;
+        AccentHueShift = 188;
     else if (qssThemeName == "ixranium_green")
-        AccentHueShift = 267;
+        AccentHueShift = 318;
     else if (qssThemeName == "ixranium_purple")
-        AccentHueShift = 57;
+        AccentHueShift = 108;
+    else if (qssThemeName == "ixranium_blue")
+        AccentHueShift = 51;
     else
-        AccentHueShift = 0; // ixranium_blue, dark_glass, neo_modern, or unset
+        AccentHueShift = 0; // dark_glass, neo_modern, or unset - keep turquoise default
 }
 
 LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
