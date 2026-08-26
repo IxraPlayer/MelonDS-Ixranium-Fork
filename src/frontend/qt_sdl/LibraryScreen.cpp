@@ -243,7 +243,7 @@ protected:
         // sitting near the top - reads much better on the card layout.
         // Icon fills most of the space between the tile's top edge and the
         // title text at the bottom, without crowding into the text itself.
-        const int iconSize = 84;
+        const int iconSize = 72;
         QIcon ic = icon();
         if (!ic.isNull())
         {
@@ -265,7 +265,16 @@ protected:
             QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
             qreal ix = iconArea.center().x() - pix.width() / 2.0;
             qreal iy = iconArea.center().y() - pix.height() / 2.0;
+
+            // Slightly rounded corners on the icon artwork itself, not just
+            // the tile outline - clip the pixmap to a rounded rect before
+            // drawing rather than drawing it square.
+            QPainterPath iconClip;
+            iconClip.addRoundedRect(QRectF(ix, iy, pix.width(), pix.height()), 10, 10);
+            painter.save();
+            painter.setClipPath(iconClip, Qt::IntersectClip);
             painter.drawPixmap(QPointF(ix, iy), pix);
+            painter.restore();
         }
 
         QFont f = font();
