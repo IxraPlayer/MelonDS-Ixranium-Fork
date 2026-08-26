@@ -269,7 +269,14 @@ protected:
             f.setPixelSize(34);
             f.setWeight(QFont::Light);
             painter.setFont(f);
-            painter.setPen(underMouse() ? hueShifted(QColor(157, 123, 255), LibraryScreen::AccentHueShift) : QColor(90, 95, 110));
+            // Base color kept at the same ~180deg turquoise hue as every
+            // other accent element in this file (border, glow, blobs) -
+            // it used to be a fixed violet (hue ~255deg), so the same
+            // AccentHueShift that correctly lines up the turquoise-based
+            // elements with each theme's accent was rotating this one
+            // from a different starting point and landing it on a
+            // visibly different color for every theme.
+            painter.setPen(underMouse() ? hueShifted(QColor(123, 255, 255), LibraryScreen::AccentHueShift) : QColor(90, 95, 110));
             painter.drawText(r, Qt::AlignCenter, "+");
             return;
         }
@@ -590,10 +597,18 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     // gives the "paint bleeding together" look instead of distinct blobs.
     struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
     static const Blob blobs[] = {
+        // The two "bright/deep blue" blobs used to sit at a genuinely
+        // different hue (~225deg) than the other three turquoise blobs
+        // (~180deg). hueShifted() rotates everything by the same delta,
+        // calibrated for the 180deg base, so those two always ended up
+        // off-hue from the rest of the background (and from the theme's
+        // own accent) no matter which theme was active. Re-tuned to the
+        // same 180deg base, same saturation/lightness/alpha, so all five
+        // blobs land on one consistent color per theme.
         { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 83, 83, 95) },     // turquoise
-        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(10, 34, 116, 100) }, // bright deep blue
+        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(10, 116, 116, 100) }, // bright turquoise
         { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 74, 74, 80) },    // dark turquoise
-        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(18, 47, 120, 85) },  // deep blue accent
+        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(18, 120, 120, 85) },  // turquoise accent
         { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 59, 64, 90) },    // dark turquoise, tighter
     };
 
