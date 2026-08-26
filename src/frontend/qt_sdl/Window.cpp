@@ -346,6 +346,25 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // explicit rather than relying on FramelessWindowHint's default
     // behavior, which is what those WMs actually check for.
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint | Qt::CustomizeWindowHint);
+#if defined(Q_OS_WIN)
+    // Qt's frameless hints don't reliably strip the native WS_CAPTION style
+    // bit on Windows -- it can stay invisible while restored but comes back
+    // as a real second titlebar (drawn by DWM) once the window is maximized,
+    // stacking above our own CustomTitleBar. Clearing WS_CAPTION directly on
+    // the HWND (keeping WS_THICKFRAME so resize/snap/aero-shadow still work)
+    // removes it for good, in both restored and maximized states. winId()
+    // forces the native handle to exist so this can be applied immediately,
+    // before the window is ever shown.
+    {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+        style &= ~WS_CAPTION;
+        style |= WS_THICKFRAME;
+        SetWindowLongPtr(hwnd, GWL_STYLE, style);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+#endif
 #if defined(Q_OS_LINUX)
     // Belt-and-suspenders for WMs (Openbox, etc.) that don't fully honor
     // the flags above: tell X11 directly, via the property those WMs
