@@ -187,13 +187,17 @@ protected:
             return;
         }
 
-        const int iconSize = 64;
+        // Icon fills most of the space between the tile's top edge and the
+        // title text at the bottom, rather than a small fixed 64px glyph
+        // sitting near the top - reads much better on the card layout.
+        const int iconSize = 96;
         QIcon ic = icon();
         if (!ic.isNull())
         {
             QPixmap pix = ic.pixmap(iconSize, iconSize);
-            qreal ix = r.center().x() - pix.width() / 2.0;
-            qreal iy = r.top() + 16;
+            QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
+            qreal ix = iconArea.center().x() - pix.width() / 2.0;
+            qreal iy = iconArea.center().y() - pix.height() / 2.0;
             painter.drawPixmap(QPointF(ix, iy), pix);
         }
 
