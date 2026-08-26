@@ -89,13 +89,13 @@ QPushButton {
 
 QPushButton:hover {
     background-color: #263c2b;
-    border: 1px solid #5cff8d;
+    border: 1px solid #3dfe77;
     color: #ffffff;
 }
 
 QPushButton:pressed {
-    background-color: #6cff95;
-    border: 1px solid #8fffb0;
+    background-color: #3dfe77;
+    border: 1px solid #3dfe77;
     color: #ffffff;
     padding: 10px 24px 8px 24px;
 }
@@ -114,13 +114,13 @@ QPushButton#primaryButton {
 }
 
 QPushButton#primaryButton:hover {
-    background-color: #5cff8d;
-    border: 1px solid #8fffb0;
+    background-color: #3dfe77;
+    border: 1px solid #3dfe77;
 }
 
 QPushButton#primaryButton:pressed {
-    background-color: #8fffb0;
-    border: 1px solid #c2ffd3;
+    background-color: #3dfe77;
+    border: 1px solid #3dfe77;
 }
 
 QToolButton {
@@ -136,8 +136,8 @@ QToolButton:hover {
 }
 
 QToolButton:pressed {
-    background-color: #6cff95;
-    border: 1px solid #8fffb0;
+    background-color: #3dfe77;
+    border: 1px solid #3dfe77;
     padding: 9px 7px 7px 9px;
 }
 QToolButton:disabled {
@@ -248,7 +248,7 @@ QSlider::handle:horizontal {
 }
 
 QSlider::handle:horizontal:hover {
-    background: #5cff8d;
+    background: #3dfe77;
 }
 
 QSlider::sub-page:horizontal {
@@ -432,7 +432,7 @@ QProgressBar::chunk {
 
 #gameCard:pressed {
     background-color: #263c2b;
-    border: 1px solid #6cff95;
+    border: 1px solid #3dfe77;
     padding-top: 10px;
 }
 
@@ -458,13 +458,13 @@ QProgressBar::chunk {
 
 #addGameTile:hover {
     border: 2px dashed #3dfe77;
-    color: #5cff8d;
+    color: #3dfe77;
     background-color: #162119;
 }
 
 #addGameTile:pressed {
-    border: 2px solid #6cff95;
-    color: #6cff95;
+    border: 2px solid #3dfe77;
+    color: #3dfe77;
     background-color: #1e3023;
 }
 
@@ -522,7 +522,7 @@ QProgressBar::chunk {
 
 #topMenuButton:pressed {
     background-color: #263c2b;
-    border: 1px solid #6cff95;
+    border: 1px solid #3dfe77;
     padding: 7px 4px 3px 4px;
 }
 
@@ -547,11 +547,11 @@ QProgressBar::chunk {
 }
 
 #playButton:hover {
-    background-color: #5cff8d;
+    background-color: #3dfe77;
 }
 
 #playButton:pressed {
-    background-color: #2dcc5f;
+    background-color: #3dfe77;
 }
 
 #searchBar {
@@ -586,6 +586,6 @@ QProgressBar::chunk {
 }
 
 #sidebarButton:checked {
-    background-color: #1e5c2e;
+    background-color: #3dfe77;
     color: #ffffff;
 }
