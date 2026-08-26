@@ -3002,27 +3002,46 @@ void MainWindow::moveEvent(QMoveEvent* event)
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
 {
     MSG* msg = static_cast<MSG*>(message);
-    if (msg->message == WM_NCCALCSIZE && msg->wParam == TRUE && isMaximized())
+    if (msg->message == WM_NCCALCSIZE && msg->wParam == TRUE)
     {
-        // Default handling insets the client rect by Windows' invisible
-        // resize-border margins, which (with no native frame to hide them
-        // in) show up as real empty space along the top/sides once
-        // maximized. Recompute the client rect from the monitor's work
-        // area instead so it fills it exactly, with no leftover gap.
-        HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
-        if (monitor)
+        if (isMaximized())
         {
-            MONITORINFO info;
-            info.cbSize = sizeof(MONITORINFO);
-            if (GetMonitorInfoW(monitor, &info))
+            // Default handling insets the client rect by Windows' invisible
+            // resize-border margins, which (with no native frame to hide them
+            // in) show up as real empty space along the top/sides once
+            // maximized. Recompute the client rect from the monitor's work
+            // area instead so it fills it exactly, with no leftover gap.
+            HMONITOR monitor = MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST);
+            if (monitor)
             {
-                NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-                params->rgrc[0] = info.rcWork;
-                *result = 0;
-                return true;
+                MONITORINFO info;
+                info.cbSize = sizeof(MONITORINFO);
+                if (GetMonitorInfoW(monitor, &info))
+                {
+                    NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+                    params->rgrc[0] = info.rcWork;
+                    *result = 0;
+                    return true;
+                }
             }
         }
+        else
+        {
+            // Restored (non-maximized) state: even with WS_CAPTION cleared,
+            // WS_THICKFRAME (kept for OS-native resize/snap) makes the
+            // default handler still inset the client rect by the invisible
+            // resize-border padding (SM_CXSIZEFRAME/SM_CYSIZEFRAME). With no
+            // native caption to hide it in, that padding renders as a thin
+            // white sliver above our own CustomTitleBar. We already draw our
+            // own resize grips (WindowResizeGrips), so the native border
+            // isn't needed for resizing -- just leave the proposed rect
+            // (msg->lParam's rgrc[0], already the full window rect) as-is
+            // and skip the default inset entirely.
+            *result = 0;
+            return true;
+        }
     }
+
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
