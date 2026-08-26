@@ -31,6 +31,10 @@
 #include "InputConfigDialog.h"
 #include "ui_InputConfigDialog.h"
 #include "MapButton.h"
+#include "ControlSchemeStore.h"
+
+#include <QInputDialog>
+#include <QMessageBox>
 
 
 using namespace melonDS;
@@ -144,18 +148,10 @@ void InputConfigDialog::setupKeypadPage()
 
 void InputConfigDialog::setupControlPresets()
 {
-    for (const ControlPreset& p : control_presets)
-        ui->cbxControlPreset->addItem(QString::fromUtf8(p.name));
-    ui->cbxControlPreset->addItem("Özel");
-
-    int detected = detectControlPreset();
-    applyingPreset = true;
-    ui->cbxControlPreset->setCurrentIndex(
-        detected == control_presets_custom_index ? (int)std::size(control_presets) : detected);
-    applyingPreset = false;
-
     connect(ui->cbxControlPreset, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &InputConfigDialog::on_cbxControlPreset_currentIndexChanged);
+
+    refreshPresetCombo();
 }
 
 // Order must match ControlPreset's fields (A,B,X,Y,Left,Right,Up,Down,L,R,Select,Start),
@@ -165,6 +161,23 @@ static int presetValueAt(const ControlPreset& p, int i)
     const int vals[keypad_num] = { p.a, p.b, p.x, p.y, p.left, p.right,
                                     p.up, p.down, p.l, p.r, p.select, p.start };
     return vals[i];
+}
+
+// keypadKeyMap is in display order (dskeylabels: A,B,X,Y,Left,Right,Up,Down,
+// L,R,Select,Start). Saved schemes are stored in EmuInstance::buttonNames[]
+// native order instead, so they can be applied straight to a running
+// instance's keyMapping[] without needing this dialog's ordering at all
+// (see EmuInstance::applyKeypadKeyOverride and MainWindow::onLibraryGameActivated).
+static void keypadMapToNativeOrder(const int (&display)[keypad_num], int (&native)[12])
+{
+    for (int k = 0; k < keypad_num; k++)
+        native[dskeyorder[k]] = display[k];
+}
+
+static void nativeOrderToKeypadMap(const int (&native)[12], int (&display)[keypad_num])
+{
+    for (int k = 0; k < keypad_num; k++)
+        display[k] = native[dskeyorder[k]];
 }
 
 int InputConfigDialog::detectControlPreset()
@@ -179,26 +192,127 @@ int InputConfigDialog::detectControlPreset()
         }
         if (match) return i;
     }
+
+    int nativeCur[12];
+    keypadMapToNativeOrder(keypadKeyMap, nativeCur);
+    for (int i = 0; i < customSchemeNames.size(); i++)
+    {
+        int nativeSaved[12];
+        if (!ControlSchemeStore::load(customSchemeNames[i], nativeSaved)) continue;
+        bool match = true;
+        for (int k = 0; k < 12; k++)
+        {
+            if (nativeCur[k] != nativeSaved[k]) { match = false; break; }
+        }
+        if (match) return (int)std::size(control_presets) + i;
+    }
+
     return control_presets_custom_index;
+}
+
+void InputConfigDialog::refreshPresetCombo(const QString& preferSelectName)
+{
+    customSchemeNames = ControlSchemeStore::listNames();
+
+    applyingPreset = true;
+    ui->cbxControlPreset->clear();
+    for (const ControlPreset& p : control_presets)
+        ui->cbxControlPreset->addItem(QString::fromUtf8(p.name));
+    for (const QString& name : customSchemeNames)
+        ui->cbxControlPreset->addItem(name);
+    ui->cbxControlPreset->addItem("Özel");
+
+    int builtinCount = (int)std::size(control_presets);
+    int selectIdx;
+    if (!preferSelectName.isEmpty() && customSchemeNames.contains(preferSelectName))
+        selectIdx = builtinCount + customSchemeNames.indexOf(preferSelectName);
+    else
+    {
+        int detected = detectControlPreset();
+        selectIdx = (detected == control_presets_custom_index)
+            ? builtinCount + customSchemeNames.size()
+            : detected;
+    }
+    ui->cbxControlPreset->setCurrentIndex(selectIdx);
+    applyingPreset = false;
+
+    ui->btnDeleteScheme->setEnabled(selectIdx >= builtinCount &&
+                                     selectIdx < builtinCount + customSchemeNames.size());
 }
 
 void InputConfigDialog::on_cbxControlPreset_currentIndexChanged(int idx)
 {
     if (applyingPreset) return;
-    if (idx < 0 || idx >= (int)std::size(control_presets)) return; // "Özel" selected, nothing to apply
 
-    const ControlPreset& p = control_presets[idx];
-    for (int k = 0; k < keypad_num; k++)
-        keypadKeyMap[k] = presetValueAt(p, k);
+    int builtinCount = (int)std::size(control_presets);
+    ui->btnDeleteScheme->setEnabled(idx >= builtinCount && idx < builtinCount + customSchemeNames.size());
+
+    if (idx < 0) return;
+
+    if (idx < builtinCount)
+    {
+        const ControlPreset& p = control_presets[idx];
+        for (int k = 0; k < keypad_num; k++)
+            keypadKeyMap[k] = presetValueAt(p, k);
+    }
+    else if (idx < builtinCount + customSchemeNames.size())
+    {
+        int native[12];
+        if (!ControlSchemeStore::load(customSchemeNames[idx - builtinCount], native))
+            return;
+        nativeOrderToKeypadMap(native, keypadKeyMap);
+    }
+    else
+    {
+        return; // "Özel" selected, nothing to apply
+    }
 
     for (KeyMapButton* btn : keypadKeyButtons)
         if (btn) btn->refresh();
 
-    // Picking a preset is a decisive action on its own; commit it straight
-    // through rather than waiting for OK.
+    // Picking a preset/scheme is a decisive action on its own; commit it
+    // straight through rather than waiting for OK.
     commitAndSave();
 }
 
+void InputConfigDialog::on_btnSaveScheme_clicked()
+{
+    bool ok = false;
+    QString name = QInputDialog::getText(this, "Kontrol Şeması Kaydet", "Şema adı:",
+                                          QLineEdit::Normal, QString(), &ok);
+    name = name.trimmed();
+    if (!ok || name.isEmpty()) return;
+
+    if (customSchemeNames.contains(name))
+    {
+        if (QMessageBox::question(this, "Kontrol Şeması Kaydet",
+                QString("\"%1\" adlı şema zaten var. Üzerine yazılsın mı?").arg(name))
+            != QMessageBox::Yes)
+            return;
+    }
+
+    int native[12];
+    keypadMapToNativeOrder(keypadKeyMap, native);
+    ControlSchemeStore::save(name, native);
+
+    refreshPresetCombo(name);
+}
+
+void InputConfigDialog::on_btnDeleteScheme_clicked()
+{
+    int idx = ui->cbxControlPreset->currentIndex();
+    int builtinCount = (int)std::size(control_presets);
+    if (idx < builtinCount || idx >= builtinCount + customSchemeNames.size())
+        return; // a built-in preset or "Özel" is selected, nothing to delete
+
+    QString name = customSchemeNames[idx - builtinCount];
+    if (QMessageBox::question(this, "Kontrol Şeması Sil",
+            QString("\"%1\" adlı şema silinsin mi?").arg(name)) != QMessageBox::Yes)
+        return;
+
+    ControlSchemeStore::remove(name);
+    refreshPresetCombo();
+}
 // Writes every mapping array (keypad, addon hotkeys, general hotkeys, both
 // keyboard and joystick sides, plus the selected joystick device) straight
 // through to config and saves immediately. Called after every individual

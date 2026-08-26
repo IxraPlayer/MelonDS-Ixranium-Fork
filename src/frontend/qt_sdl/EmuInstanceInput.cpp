@@ -136,6 +136,14 @@ void EmuInstance::inputLoadConfig()
     SDL_UnlockMutex(joyMutex.get());
 }
 
+void EmuInstance::applyKeypadKeyOverride(const int (&nativeKeyMap)[12])
+{
+    SDL_LockMutex(joyMutex.get());
+    for (int i = 0; i < 12; i++)
+        keyMapping[i] = nativeKeyMap[i];
+    SDL_UnlockMutex(joyMutex.get());
+}
+
 void EmuInstance::inputRumbleStart(melonDS::u32 len_ms)
 {
     SDL_LockMutex(joyMutex.get());

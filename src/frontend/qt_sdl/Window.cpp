@@ -138,6 +138,7 @@
 #include "CustomTitleBar.h"
 #include "TopMenuBar.h"
 #include "InputConfig/KeyboardPreviewWidget.h"
+#include "InputConfig/ControlSchemeStore.h"
 #include <QToolBar>
 #include <QWindow>
 
@@ -2112,6 +2113,21 @@ void MainWindow::onLibraryGameActivated(QString path)
     {
         QMessageBox::critical(this, "MelonDS - Ixranium Fork", errorstr);
         return;
+    }
+
+    // Per-game "Details" control scheme override: reload the global
+    // keyboard mapping first so a previous game's override (if any) can't
+    // leak into this boot, then layer this game's override on top if it
+    // has one. Applied to the live mapping only (never written to config),
+    // so it's purely in-memory for this session and never touches the
+    // user's global keyboard settings.
+    emuInstance->inputLoadConfig();
+    QString overrideScheme = library ? library->controlSchemeOverride(path) : QString();
+    if (!overrideScheme.isEmpty())
+    {
+        int nativeMap[12];
+        if (ControlSchemeStore::load(overrideScheme, nativeMap))
+            emuInstance->applyKeypadKeyOverride(nativeMap);
     }
 
     recentFileList.removeAll(path);

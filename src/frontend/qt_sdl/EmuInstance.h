@@ -157,6 +157,12 @@ public:
     void inputRumbleStart(melonDS::u32 len_ms);
     void inputRumbleStop();
 
+    // Overwrites just the live keyboard keypad mapping (12 buttons, in
+    // buttonNames[] native order) without touching config on disk - used
+    // for a per-game control scheme applied at boot, on top of whatever
+    // the user's global keyboard mapping is.
+    void applyKeypadKeyOverride(const int (&nativeKeyMap)[12]);
+
     bool inputHotkeyDown(int id) { return hotkeyDown(id); }
     float inputMotionQuery(melonDS::Platform::MotionQueryType type);
 

@@ -2344,6 +2344,20 @@
        </property>
       </widget>
      </item>
+     <item>
+      <widget class="QPushButton" name="btnSaveScheme">
+       <property name="text">
+        <string>Kaydet...</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btnDeleteScheme">
+       <property name="text">
+        <string>Sil</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
   </layout>

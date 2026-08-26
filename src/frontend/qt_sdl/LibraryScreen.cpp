@@ -34,6 +34,8 @@
 #include <QRadioButton>
 #include <QButtonGroup>
 #include <QDialogButtonBox>
+#include <QComboBox>
+#include "InputConfig/ControlSchemeStore.h"
 #include <QVBoxLayout>
 #include <QLabel>
 
@@ -408,6 +410,7 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     setObjectName("libraryScreen");
 
     loadConsoleOverrides();
+    loadSchemeOverrides();
 
     // Slow animated wave between turquoise and near-black, redrawn in
     // paintEvent(). ~20fps is plenty for something this gradual - no
@@ -891,6 +894,45 @@ void LibraryScreen::setConsoleTypeOverride(const QString& path, int type)
     saveConsoleOverrides();
 }
 
+static const char* kSchemeOverrideSettingsGroup = "GameControlSchemeOverrides";
+
+void LibraryScreen::loadSchemeOverrides()
+{
+    QSettings settings;
+    settings.beginGroup(kSchemeOverrideSettingsGroup);
+    for (const QString& key : settings.childKeys())
+    {
+        QString val = settings.value(key).toString();
+        if (!val.isEmpty())
+            schemeOverrides.insert(key, val);
+    }
+    settings.endGroup();
+}
+
+void LibraryScreen::saveSchemeOverrides()
+{
+    QSettings settings;
+    settings.beginGroup(kSchemeOverrideSettingsGroup);
+    settings.remove("");
+    for (auto it = schemeOverrides.constBegin(); it != schemeOverrides.constEnd(); ++it)
+        settings.setValue(it.key(), it.value());
+    settings.endGroup();
+}
+
+QString LibraryScreen::controlSchemeOverride(const QString& path) const
+{
+    return schemeOverrides.value(path, QString());
+}
+
+void LibraryScreen::setControlSchemeOverride(const QString& path, const QString& schemeName)
+{
+    if (!schemeName.isEmpty())
+        schemeOverrides.insert(path, schemeName);
+    else
+        schemeOverrides.remove(path);
+    saveSchemeOverrides();
+}
+
 // "Details" popup opened from a game tile's right-click menu. Currently
 // just holds the per-game DS/DSi console type override, but is its own
 // dialog (rather than a plain QMenu submenu) so more per-game info/
@@ -931,13 +973,31 @@ void LibraryScreen::showGameDetailsDialog(const QString& path, QWidget* anchor)
     else if (current == 1) optDSi->setChecked(true);
     else optDefault->setChecked(true);
 
+    auto* schemeLabel = new QLabel("Kontrol şeması:", &dlg);
+    layout->addWidget(schemeLabel);
+
+    auto* cbxScheme = new QComboBox(&dlg);
+    cbxScheme->addItem("Global (varsayılan)");
+    QStringList schemeNames = ControlSchemeStore::listNames();
+    cbxScheme->addItems(schemeNames);
+    layout->addWidget(cbxScheme);
+
+    QString currentScheme = controlSchemeOverride(path);
+    int schemeIdx = currentScheme.isEmpty() ? 0 : (1 + schemeNames.indexOf(currentScheme));
+    cbxScheme->setCurrentIndex(schemeIdx < 1 ? 0 : schemeIdx);
+
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
     if (dlg.exec() == QDialog::Accepted)
+    {
         setConsoleTypeOverride(path, group->checkedId());
+
+        int idx = cbxScheme->currentIndex();
+        setControlSchemeOverride(path, idx <= 0 ? QString() : schemeNames[idx - 1]);
+    }
 }
 
 void LibraryScreen::resizeEvent(QResizeEvent* event)

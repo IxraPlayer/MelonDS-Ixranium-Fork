@@ -26,6 +26,8 @@ set(SOURCES_QT_SDL
     InputConfig/MapButton.h
     InputConfig/KeyboardPreviewWidget.h
     InputConfig/KeyboardPreviewWidget.cpp
+    InputConfig/ControlSchemeStore.h
+    InputConfig/ControlSchemeStore.cpp
     InputConfig/resources/ds.qrc
     VideoSettingsDialog.cpp
     CameraSettingsDialog.cpp

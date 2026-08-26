@@ -25,6 +25,7 @@
 
 #include "Config.h"
 #include "EmuInstance.h"
+#include <QStringList>
 
 static constexpr int keypad_num = 12;
 
@@ -176,6 +177,8 @@ private slots:
     void on_cbxJoystick_currentIndexChanged(int id);
     void on_cbxControlPreset_currentIndexChanged(int idx);
     void commitAndSave();
+    void on_btnSaveScheme_clicked();
+    void on_btnDeleteScheme_clicked();
 
 private:
     void populatePage(QWidget* page,
@@ -184,6 +187,12 @@ private:
     void setupKeypadPage();
     void setupControlPresets();
     int detectControlPreset();
+    // Rebuilds the combo box contents (built-ins + saved schemes + "Özel")
+    // and selects whichever entry matches the current keypadKeyMap, or a
+    // specific saved scheme name if preferSelectName is non-empty (used
+    // right after saving/deleting one, since the mapping itself doesn't
+    // change but the row we want selected does).
+    void refreshPresetCombo(const QString& preferSelectName = QString());
 
     Ui::InputConfigDialog* ui;
 
@@ -195,6 +204,10 @@ private:
     // their labels immediately.
     KeyMapButton* keypadKeyButtons[keypad_num] = {};
     bool applyingPreset = false;
+
+    // Names of user-saved schemes, in the same order they appear in the
+    // combo box right after the built-in presets (see refreshPresetCombo).
+    QStringList customSchemeNames;
 
     int keypadKeyMap[12], keypadJoyMap[12];
     int addonsKeyMap[hk_addons.size()], addonsJoyMap[hk_addons.size()];

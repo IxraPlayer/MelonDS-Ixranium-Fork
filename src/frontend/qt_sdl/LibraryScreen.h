@@ -45,6 +45,13 @@ public:
     int consoleTypeOverride(const QString& path) const;
     void setConsoleTypeOverride(const QString& path, int type);
 
+    // Per-game control scheme override: the name of a scheme saved via
+    // InputConfigDialog/ControlSchemeStore, or an empty string to follow
+    // whatever the user's global keyboard mapping is. Also set via the
+    // tile's "Details..." menu.
+    QString controlSchemeOverride(const QString& path) const;
+    void setControlSchemeOverride(const QString& path, const QString& schemeName);
+
     // Public so GameCardButton (a helper class defined alongside
     // LibraryScreen in the .cpp) can read the currently selected accent
     // hue without needing to be a friend class.
@@ -85,6 +92,13 @@ private:
     QMap<QString, int> consoleOverrides;
     void loadConsoleOverrides();
     void saveConsoleOverrides();
+
+    // Per-game control scheme overrides (ROM path -> scheme name, absent =
+    // follow global), same persistence approach as consoleOverrides above.
+    QMap<QString, QString> schemeOverrides;
+    void loadSchemeOverrides();
+    void saveSchemeOverrides();
+
     void showGameDetailsDialog(const QString& path, QWidget* anchor);
 
     // Drag-reorder tracking: which tile the current press started on, and
