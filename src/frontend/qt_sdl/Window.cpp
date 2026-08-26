@@ -1748,14 +1748,26 @@ QString MainWindow::detectDesktopPath()
     // "%USERPROFILE%\Desktop" guess would miss. Also avoids spawning a
     // powershell.exe process just to read one path, which could exceed
     // the old 3s timeout on a slow first launch and silently fail.
+    // SHGetKnownFolderPath needs COM initialized on the calling thread to
+    // reliably resolve redirected folders (e.g. OneDrive-managed Desktop).
+    // Without this, it can silently fail here and fall through to the
+    // QStandardPaths fallback below, which does NOT know about OneDrive
+    // redirection and returns the wrong (default) Desktop path.
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool needCoUninit = SUCCEEDED(coHr); // see RPC_E_CHANGED_MODE note elsewhere in this file
+
     PWSTR pathPtr = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &pathPtr)) && pathPtr)
     {
         QString path = QString::fromWCharArray(pathPtr);
         CoTaskMemFree(pathPtr);
+        if (needCoUninit)
+            CoUninitialize();
         if (!path.isEmpty())
             return path;
     }
+    if (needCoUninit)
+        CoUninitialize();
 #elif defined(Q_OS_MAC)
     QString path = QDir::homePath() + "/Desktop";
     if (QDir(path).exists())
