@@ -331,10 +331,22 @@ private:
         timer = new QTimer(qApp);
         QObject::connect(timer, &QTimer::timeout, qApp, []()
         {
+            // Only the card currently under the mouse (or being pressed)
+            // needs its glow to keep moving - that's the whole point of the
+            // effect, drawing attention to what you're pointing at. Ticking
+            // every idle tile in the whole library too was the real cost:
+            // an antialiased gradient repaint for every single card, N times
+            // a second, regardless of whether anyone was even looking at it.
+            // Idle tiles just keep whatever glow frame they last painted
+            // (frozen, not moving) and only repaint again on a real Qt event
+            // (scroll, resize, hover entering/leaving) - which is free.
             for (GameCardButton* w : liveInstances())
             {
-                if (w->isVisible() && !w->visibleRegion().isEmpty())
+                if ((w->underMouse() || w->isDown()) &&
+                    w->isVisible() && !w->visibleRegion().isEmpty())
+                {
                     w->update();
+                }
             }
         });
         timer->start(120);
