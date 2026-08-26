@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
+#include <QSet>
 
 #include "NDS_Header.h"
 #include <QMouseEvent>
@@ -144,18 +145,8 @@ public:
         : QToolButton(parent), isAddTile(addTileStyle)
     {
         glowClock.start();
-        auto* t = new QTimer(this);
-        connect(t, &QTimer::timeout, this, [this] { update(); });
-        // Was 50ms (20fps) per tile. With a full library of games each
-        // running its own independent timer + full repaint (glow border
-        // conical gradient, sheen gradient, rounded-rect clipping, all
-        // with antialiasing) purely to animate a slow ambient glow, this
-        // was the actual source of the low FPS in the library screen -
-        // it's O(number of games) repaints every 50ms, most of them for
-        // tiles that aren't even being looked at. 120ms keeps the glow
-        // looking smooth (it moves slowly) while cutting that repaint
-        // load to under half.
-        t->start(120);
+        liveInstances().insert(this);
+        ensureSharedTimer();
 
         // Hover "grow" effect: purely a paint-time transform around the
         // card's own center, drawn inside the padding reserved above.
@@ -170,6 +161,35 @@ public:
             hoverScale = v.toReal();
             update();
         });
+    }
+
+    ~GameCardButton() override
+    {
+        liveInstances().remove(this);
+    }
+
+    // Pre-scales the ROM icon once (Scale2x x2 + final downscale to the
+    // 48px display size) and caches the result, instead of redoing that
+    // pixel-by-pixel upscale from scratch in every single paintEvent.
+    // Every tile used to re-run scale2x() twice on its icon on every one
+    // of its own repaints (every 120ms, plus every hover/press) - with a
+    // full library open that's what was actually making the screen crawl,
+    // far more than the gradient/glow painting ever was.
+    void setGameIcon(const QImage& iconImg)
+    {
+        if (iconImg.isNull())
+        {
+            cachedIcon = QPixmap();
+            update();
+            return;
+        }
+        const int iconSize = 48;
+        QImage scaled = scale2x(scale2x(iconImg)); // 4x, matches native 32x32 source
+        QPixmap pix = QPixmap::fromImage(scaled);
+        if (pix.width() > iconSize || pix.height() > iconSize)
+            pix = pix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        cachedIcon = pix;
+        update();
     }
 
 protected:
@@ -260,24 +280,10 @@ protected:
         // Icon fills most of the space between the tile's top edge and the
         // title text at the bottom, without crowding into the text itself.
         const int iconSize = 48;
-        QIcon ic = icon();
-        if (!ic.isNull())
+        if (!cachedIcon.isNull())
         {
-            // QIcon::pixmap() refuses to upscale a small source pixmap (NDS
-            // icons are natively 32x32) past its original resolution, so a
-            // plain ic.pixmap(iconSize,...) silently ignored iconSize. Grab
-            // the native-resolution source, run it through Scale2x twice
-            // (4x total - 32px source covers our display sizes without a
-            // further blurry smooth upscale on top), then only downscale
-            // with SmoothTransformation if the result is still bigger than
-            // needed, which - going down, not up - doesn't reintroduce blur
-            // the way upscaling did.
-            QPixmap srcPix = ic.pixmap(ic.availableSizes().isEmpty() ? QSize(iconSize, iconSize) : ic.availableSizes().first());
-            QImage img = srcPix.toImage();
-            QImage scaled = scale2x(scale2x(img)); // 4x
-            QPixmap pix = QPixmap::fromImage(scaled);
-            if (pix.width() > iconSize || pix.height() > iconSize)
-                pix = pix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            // Already scaled once in setGameIcon() - just draw it.
+            const QPixmap& pix = cachedIcon;
             QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
             qreal ix = iconArea.center().x() - pix.width() / 2.0;
             qreal iy = iconArea.center().y() - pix.height() / 2.0;
@@ -305,10 +311,40 @@ protected:
     }
 
 private:
+    // Every tile used to own its own 120ms QTimer purely to animate the
+    // slow ambient glow border. With a large library that was N independent
+    // timers/repaints firing out of sync with each other; a single shared
+    // timer that nudges every live tile at once is lighter-weight and,
+    // combined with the visibility check below, skips repainting tiles
+    // that are currently scrolled out of view entirely.
+    static QSet<GameCardButton*>& liveInstances()
+    {
+        static QSet<GameCardButton*> instances;
+        return instances;
+    }
+
+    static void ensureSharedTimer()
+    {
+        static QTimer* timer = nullptr;
+        if (timer)
+            return;
+        timer = new QTimer(qApp);
+        QObject::connect(timer, &QTimer::timeout, qApp, []()
+        {
+            for (GameCardButton* w : liveInstances())
+            {
+                if (w->isVisible() && !w->visibleRegion().isEmpty())
+                    w->update();
+            }
+        });
+        timer->start(120);
+    }
+
     bool isAddTile;
     QElapsedTimer glowClock;
     QVariantAnimation* scaleAnim = nullptr;
     qreal hoverScale = 1.0;
+    QPixmap cachedIcon;
 };
 
 using namespace melonDS;
@@ -714,11 +750,7 @@ void LibraryScreen::addGame(const QString& path)
 
     QImage iconImg = loadRomIconImage(path);
     if (!iconImg.isNull())
-    {
-        QIcon icon(QPixmap::fromImage(iconImg));
-        tile->setIcon(icon);
-        tile->setIconSize(QSize(64, 64));
-    }
+        tile->setGameIcon(iconImg);
 
     connect(tile, &QToolButton::clicked, this, [this, path]()
     {
