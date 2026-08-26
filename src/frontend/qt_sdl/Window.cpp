@@ -2058,8 +2058,22 @@ void MainWindow::onLibraryGameActivated(QString path)
 
     QStringList file = path.split('|');
 
+    // Per-game "Details" console type override (set via the library tile's
+    // right-click menu): temporarily swap the global Console type setting
+    // for just this boot, then restore whatever the user has as their
+    // actual global default so this never overwrites it permanently.
+    int overrideConsole = library ? library->consoleTypeOverride(path) : -1;
+    int savedConsoleType = globalCfg.GetInt("Emu.ConsoleType");
+    if (overrideConsole == 0 || overrideConsole == 1)
+        globalCfg.SetInt("Emu.ConsoleType", overrideConsole);
+
     QString errorstr;
-    if (!emuThread->bootROM(file, errorstr))
+    bool ok = emuThread->bootROM(file, errorstr);
+
+    if (overrideConsole == 0 || overrideConsole == 1)
+        globalCfg.SetInt("Emu.ConsoleType", savedConsoleType);
+
+    if (!ok)
     {
         QMessageBox::critical(this, "MelonDS - Ixranium Fork", errorstr);
         return;

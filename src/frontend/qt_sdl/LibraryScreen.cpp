@@ -28,6 +28,13 @@
 #include <QMimeData>
 #include <QDrag>
 #include <QApplication>
+#include <QSettings>
+#include <QDialog>
+#include <QRadioButton>
+#include <QButtonGroup>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
+#include <QLabel>
 
 // MIME type used to carry the dragged tile's ROM path during a
 // press-and-drag reorder within the library grid.
@@ -127,7 +134,7 @@ static QColor hueShifted(const QColor& c, int deltaDeg)
 // makes that entire class of bug impossible: the layout never sees a
 // size change, so it never has a reason to move or drop anything.
 static const int kCardVisualSize = 140;
-static const int kCardHoverPad = 12; // >= half of (140 * 0.16) growth, rounded up
+static const int kCardHoverPad = 8; // >= half of (140 * 0.08) growth, rounded up
 static const int kCardFootprint = kCardVisualSize + kCardHoverPad * 2;
 
 class GameCardButton : public QToolButton
@@ -162,7 +169,7 @@ protected:
         raise(); // draw over neighboring cards instead of being clipped/overlapped by them
         scaleAnim->stop();
         scaleAnim->setStartValue(hoverScale);
-        scaleAnim->setEndValue(1.16);
+        scaleAnim->setEndValue(1.08);
         scaleAnim->start();
     }
 
@@ -320,6 +327,8 @@ void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
 LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
 {
     setObjectName("libraryScreen");
+
+    loadConsoleOverrides();
 
     // Slow animated wave between turquoise and near-black, redrawn in
     // paintEvent(). ~20fps is plenty for something this gradual - no
@@ -721,9 +730,14 @@ void LibraryScreen::addGame(const QString& path)
             "  border-radius: 8px; padding: 4px; color: white; }"
             "QMenu::item { padding: 6px 14px; border-radius: 5px; }"
             "QMenu::item:selected { background: rgba(255,255,255,35); }");
+        QAction* detailsAct = menu.addAction("Details...");
         QAction* removeAct = menu.addAction("Remove from library");
         QAction* chosen = menu.exec(tile->mapToGlobal(pos));
-        if (chosen == removeAct)
+        if (chosen == detailsAct)
+        {
+            showGameDetailsDialog(path, tile);
+        }
+        else if (chosen == removeAct)
         {
             paths.removeAll(path);
             tiles.remove(path);
@@ -735,6 +749,98 @@ void LibraryScreen::addGame(const QString& path)
 
     tiles.insert(path, tile);
     relayout();
+}
+
+// Stored separately from the main melonDS config file (own QSettings
+// group, keyed by ROM path) so this per-game convenience feature doesn't
+// need to touch Config.cpp's schema at all. -1 (absent) means "follow
+// the global Console type setting".
+static const char* kConsoleOverrideSettingsGroup = "GameConsoleOverrides";
+
+void LibraryScreen::loadConsoleOverrides()
+{
+    QSettings settings;
+    settings.beginGroup(kConsoleOverrideSettingsGroup);
+    for (const QString& key : settings.childKeys())
+    {
+        int val = settings.value(key).toInt();
+        if (val == 0 || val == 1)
+            consoleOverrides.insert(key, val);
+    }
+    settings.endGroup();
+}
+
+void LibraryScreen::saveConsoleOverrides()
+{
+    QSettings settings;
+    settings.beginGroup(kConsoleOverrideSettingsGroup);
+    settings.remove(""); // clear the group, then rewrite it in full
+    for (auto it = consoleOverrides.constBegin(); it != consoleOverrides.constEnd(); ++it)
+        settings.setValue(it.key(), it.value());
+    settings.endGroup();
+}
+
+int LibraryScreen::consoleTypeOverride(const QString& path) const
+{
+    return consoleOverrides.value(path, -1);
+}
+
+void LibraryScreen::setConsoleTypeOverride(const QString& path, int type)
+{
+    if (type == 0 || type == 1)
+        consoleOverrides.insert(path, type);
+    else
+        consoleOverrides.remove(path);
+    saveConsoleOverrides();
+}
+
+// "Details" popup opened from a game tile's right-click menu. Currently
+// just holds the per-game DS/DSi console type override, but is its own
+// dialog (rather than a plain QMenu submenu) so more per-game info/
+// settings can be added here later without needing another menu entry.
+void LibraryScreen::showGameDetailsDialog(const QString& path, QWidget* anchor)
+{
+    QDialog dlg(anchor ? anchor->window() : this);
+    dlg.setWindowTitle("Game Details");
+    dlg.setStyleSheet(
+        "QDialog { background: rgb(24,26,34); color: white; }"
+        "QLabel { color: white; }"
+        "QRadioButton { color: white; padding: 4px; }");
+
+    auto* layout = new QVBoxLayout(&dlg);
+
+    auto* nameLabel = new QLabel(displayName(path), &dlg);
+    QFont nf = nameLabel->font();
+    nf.setBold(true);
+    nameLabel->setFont(nf);
+    layout->addWidget(nameLabel);
+
+    auto* consoleLabel = new QLabel("Console type for this game:", &dlg);
+    layout->addWidget(consoleLabel);
+
+    auto* group = new QButtonGroup(&dlg);
+    auto* optDefault = new QRadioButton("Use global default", &dlg);
+    auto* optDS = new QRadioButton("Nintendo DS", &dlg);
+    auto* optDSi = new QRadioButton("Nintendo DSi", &dlg);
+    group->addButton(optDefault, -1);
+    group->addButton(optDS, 0);
+    group->addButton(optDSi, 1);
+    layout->addWidget(optDefault);
+    layout->addWidget(optDS);
+    layout->addWidget(optDSi);
+
+    int current = consoleTypeOverride(path);
+    if (current == 0) optDS->setChecked(true);
+    else if (current == 1) optDSi->setChecked(true);
+    else optDefault->setChecked(true);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlg);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
+
+    if (dlg.exec() == QDialog::Accepted)
+        setConsoleTypeOverride(path, group->checkedId());
 }
 
 void LibraryScreen::resizeEvent(QResizeEvent* event)

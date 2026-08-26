@@ -37,6 +37,14 @@ public:
 
     static void ApplyAccentTheme(const QString& qssThemeName);
 
+    // Per-game console type override (0 = DS, 1 = DSi, -1 = follow the
+    // global "Console type" setting). Set via each tile's right-click
+    // "Details..." menu so a game can be forced to boot as DS/DSi without
+    // having to open the main Emu Settings dialog and change (and later
+    // revert) the global default just for that one game.
+    int consoleTypeOverride(const QString& path) const;
+    void setConsoleTypeOverride(const QString& path, int type);
+
     // Public so GameCardButton (a helper class defined alongside
     // LibraryScreen in the .cpp) can read the currently selected accent
     // hue without needing to be a friend class.
@@ -69,6 +77,15 @@ private:
     QStringList paths;
     QMap<QString, QToolButton*> tiles;
     int columns;
+
+    // Per-game console type overrides (ROM path -> 0/1), persisted via
+    // QSettings under a dedicated group so it survives restarts without
+    // touching the main config file's schema. Loaded once in the
+    // constructor and rewritten whenever an entry changes.
+    QMap<QString, int> consoleOverrides;
+    void loadConsoleOverrides();
+    void saveConsoleOverrides();
+    void showGameDetailsDialog(const QString& path, QWidget* anchor);
 
     // Drag-reorder tracking: which tile the current press started on, and
     // where, so mouseMove can tell a click apart from a drag.
