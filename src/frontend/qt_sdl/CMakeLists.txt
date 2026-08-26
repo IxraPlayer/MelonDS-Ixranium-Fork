@@ -24,6 +24,8 @@ set(SOURCES_QT_SDL
     PowerManagement/resources/battery.qrc
     InputConfig/InputConfigDialog.cpp
     InputConfig/MapButton.h
+    InputConfig/KeyboardPreviewWidget.h
+    InputConfig/KeyboardPreviewWidget.cpp
     InputConfig/resources/ds.qrc
     VideoSettingsDialog.cpp
     CameraSettingsDialog.cpp

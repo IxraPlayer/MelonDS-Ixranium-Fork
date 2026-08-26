@@ -137,6 +137,7 @@
 #include "AboutDialog.h"
 #include "CustomTitleBar.h"
 #include "TopMenuBar.h"
+#include "InputConfig/KeyboardPreviewWidget.h"
 #include <QToolBar>
 #include <QWindow>
 
@@ -3247,6 +3248,20 @@ void MainWindow::togglePauseMenu()
     boxRow->addStretch();
     outer->addLayout(boxRow);
     outer->addStretch();
+
+    // Keyboard mapping preview, bottom-right corner of the pause overlay:
+    // every key currently bound to a DS button/hotkey lights up blue so the
+    // player can see their whole layout at a glance (hover a blue key to
+    // see what it's bound to).
+    auto* kbPreview = new KeyboardPreviewWidget(pauseMenuOverlay);
+    kbPreview->setFixedSize(400, 140);
+    kbPreview->refreshFromInstance(emuInstance);
+
+    auto* kbRow = new QHBoxLayout();
+    kbRow->addStretch();
+    kbRow->addWidget(kbPreview);
+    kbRow->setContentsMargins(0, 0, 18, 14);
+    outer->addLayout(kbRow);
 
     // Fade the whole overlay (dimmer + panel together) in rather than
     // popping it in instantly - reads much less jarring mid-gameplay.
