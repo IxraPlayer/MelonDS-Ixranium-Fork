@@ -146,7 +146,16 @@ public:
         glowClock.start();
         auto* t = new QTimer(this);
         connect(t, &QTimer::timeout, this, [this] { update(); });
-        t->start(50);
+        // Was 50ms (20fps) per tile. With a full library of games each
+        // running its own independent timer + full repaint (glow border
+        // conical gradient, sheen gradient, rounded-rect clipping, all
+        // with antialiasing) purely to animate a slow ambient glow, this
+        // was the actual source of the low FPS in the library screen -
+        // it's O(number of games) repaints every 50ms, most of them for
+        // tiles that aren't even being looked at. 120ms keeps the glow
+        // looking smooth (it moves slowly) while cutting that repaint
+        // load to under half.
+        t->start(120);
 
         // Hover "grow" effect: purely a paint-time transform around the
         // card's own center, drawn inside the padding reserved above.
@@ -733,6 +742,20 @@ void LibraryScreen::addGame(const QString& path)
         QAction* detailsAct = menu.addAction("Details...");
         QAction* removeAct = menu.addAction("Remove from library");
         QAction* chosen = menu.exec(tile->mapToGlobal(pos));
+
+        // QMenu::exec() grabs the mouse for the duration of the popup, and
+        // Qt doesn't reliably resend enter/leave events to the tile
+        // underneath once it closes - so if the pointer had moved off the
+        // tile while the menu was open, the tile's enterEvent-driven hover
+        // scale animation never got the matching leaveEvent and stayed
+        // "grown" even though the mouse is no longer over it. Explicitly
+        // resync the hover state against where the cursor actually is now.
+        if (!tile->underMouse())
+        {
+            QEvent leave(QEvent::Leave);
+            QApplication::sendEvent(tile, &leave);
+        }
+
         if (chosen == detailsAct)
         {
             showGameDetailsDialog(path, tile);
