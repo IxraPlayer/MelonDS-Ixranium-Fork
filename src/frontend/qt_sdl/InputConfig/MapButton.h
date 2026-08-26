@@ -49,6 +49,14 @@ public:
     {
     }
 
+    // Re-reads *mapping and updates the button label.
+    // Used when the mapping is changed externally, e.g. by a control preset.
+    void refresh()
+    {
+        if (!isChecked())
+            setText(mappingText());
+    }
+
 protected:
     void keyPressEvent(QKeyEvent* event) override
     {

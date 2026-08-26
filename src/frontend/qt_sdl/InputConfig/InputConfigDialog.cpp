@@ -20,6 +20,8 @@
 #include <QLabel>
 #include <QKeyEvent>
 #include <QDebug>
+#include <QComboBox>
+#include <iterator>
 
 #include <SDL2/SDL.h>
 
@@ -96,6 +98,7 @@ InputConfigDialog::InputConfigDialog(QWidget* parent) : QDialog(parent), ui(new 
     }
 
     setupKeypadPage();
+    setupControlPresets();
 
     int inst = emuInstance->getInstanceID();
     if (inst > 0)
@@ -125,11 +128,63 @@ void InputConfigDialog::setupKeypadPage()
         delete pushButtonKey;
         delete pushButtonJoy;
 
+        // dskeylabels[i]: "Up"=6, "Left"=4, "Right"=5, "Down"=7 -> keep track for control presets
+        if      (dskeylabels[i] == std::string("Up"))    dpadKeyButtons[0] = keyMapButtonKey;
+        else if (dskeylabels[i] == std::string("Left"))  dpadKeyButtons[1] = keyMapButtonKey;
+        else if (dskeylabels[i] == std::string("Right")) dpadKeyButtons[2] = keyMapButtonKey;
+        else if (dskeylabels[i] == std::string("Down"))  dpadKeyButtons[3] = keyMapButtonKey;
+
         if (ui->cbxJoystick->isEnabled())
         {
             ui->stackMapping->setCurrentIndex(1);
         }
     }
+}
+
+// index into keypadKeyMap/dskeylabels for each D-Pad direction
+static constexpr int kIdxUp = 6, kIdxLeft = 4, kIdxRight = 5, kIdxDown = 7;
+
+void InputConfigDialog::setupControlPresets()
+{
+    for (const ControlPreset& p : control_presets)
+        ui->cbxControlPreset->addItem(QString::fromUtf8(p.name));
+    ui->cbxControlPreset->addItem("Özel");
+
+    int detected = detectControlPreset();
+    applyingPreset = true;
+    ui->cbxControlPreset->setCurrentIndex(
+        detected == control_presets_custom_index ? (int)std::size(control_presets) : detected);
+    applyingPreset = false;
+
+    connect(ui->cbxControlPreset, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &InputConfigDialog::on_cbxControlPreset_currentIndexChanged);
+}
+
+int InputConfigDialog::detectControlPreset()
+{
+    for (int i = 0; i < (int)std::size(control_presets); i++)
+    {
+        const ControlPreset& p = control_presets[i];
+        if (keypadKeyMap[kIdxUp] == p.up && keypadKeyMap[kIdxLeft] == p.left &&
+            keypadKeyMap[kIdxRight] == p.right && keypadKeyMap[kIdxDown] == p.down)
+            return i;
+    }
+    return control_presets_custom_index;
+}
+
+void InputConfigDialog::on_cbxControlPreset_currentIndexChanged(int idx)
+{
+    if (applyingPreset) return;
+    if (idx < 0 || idx >= (int)std::size(control_presets)) return; // "Özel" selected, nothing to apply
+
+    const ControlPreset& p = control_presets[idx];
+    keypadKeyMap[kIdxUp]    = p.up;
+    keypadKeyMap[kIdxLeft]  = p.left;
+    keypadKeyMap[kIdxRight] = p.right;
+    keypadKeyMap[kIdxDown]  = p.down;
+
+    for (KeyMapButton* btn : dpadKeyButtons)
+        if (btn) btn->refresh();
 }
 
 void InputConfigDialog::populatePage(QWidget* page,

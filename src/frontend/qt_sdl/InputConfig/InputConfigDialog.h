@@ -94,6 +94,30 @@ static constexpr std::initializer_list<const char*> hk_general_labels =
 
 static_assert(hk_general.size() == hk_general_labels.size());
 
+// D-Pad control scheme presets.
+// Each entry gives the Qt::Key_* value used for Up/Left/Right/Down, in that order.
+// Only the D-Pad is touched; A/B/X/Y/L/R/Select/Start stay whatever the user set them to.
+struct ControlPreset
+{
+    const char* name;
+    int up, left, right, down;
+};
+
+static constexpr ControlPreset control_presets[] =
+{
+    // "Original" mirrors melonDS' historical default: arrow keys.
+    { "Orijinal (Ok Tuşları)", Qt::Key_Up,   Qt::Key_Left, Qt::Key_Right, Qt::Key_Down },
+    // WASD movement, matching most PC games' "walk" keys.
+    { "WASD",                  Qt::Key_W,    Qt::Key_A,    Qt::Key_D,     Qt::Key_S },
+    // Numpad direction cluster: big, well-spaced, unambiguous keys.
+    // OR'd with Qt::KeypadModifier so this binds the *numpad* 8/4/6/2 specifically,
+    // not the digit row (matches how EmuInstanceInput.cpp/KeyMapButton store captured keys).
+    { "Numpad (8/4/6/2)",      Qt::Key_8 | Qt::KeypadModifier, Qt::Key_4 | Qt::KeypadModifier,
+                                Qt::Key_6 | Qt::KeypadModifier, Qt::Key_2 | Qt::KeypadModifier },
+};
+static constexpr int control_presets_custom_index = -1;
+
+class KeyMapButton;
 
 namespace Ui { class InputConfigDialog; }
 class InputConfigDialog;
@@ -135,17 +159,25 @@ private slots:
     void on_btnKeyMapSwitch_clicked();
     void on_btnJoyMapSwitch_clicked();
     void on_cbxJoystick_currentIndexChanged(int id);
+    void on_cbxControlPreset_currentIndexChanged(int idx);
 
 private:
     void populatePage(QWidget* page,
         const std::initializer_list<const char*>& labels,
         int* keymap, int* joymap);
     void setupKeypadPage();
+    void setupControlPresets();
+    int detectControlPreset();
 
     Ui::InputConfigDialog* ui;
 
     MainWindow* mainWindow;
     EmuInstance* emuInstance;
+
+    // Up/Left/Right/Down key-mapping buttons, kept around so a preset
+    // switch can refresh their labels immediately.
+    KeyMapButton* dpadKeyButtons[4] = { nullptr, nullptr, nullptr, nullptr };
+    bool applyingPreset = false;
 
     int keypadKeyMap[12], keypadJoyMap[12];
     int addonsKeyMap[hk_addons.size()], addonsJoyMap[hk_addons.size()];

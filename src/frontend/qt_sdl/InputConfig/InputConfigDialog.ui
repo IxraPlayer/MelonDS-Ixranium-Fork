@@ -2328,6 +2328,24 @@
      </property>
     </widget>
    </item>
+   <item row="0" column="1">
+    <layout class="QHBoxLayout" name="layoutControlPreset">
+     <item>
+      <widget class="QLabel" name="lblControlPreset">
+       <property name="text">
+        <string>Control scheme:</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="cbxControlPreset">
+       <property name="toolTip">
+        <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Quickly switches the D-Pad (movement) keys between ready-made layouts. Face buttons, L/R, Select and Start are left untouched.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
   </layout>
  </widget>
  <tabstops>
