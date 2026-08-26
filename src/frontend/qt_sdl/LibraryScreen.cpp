@@ -194,7 +194,15 @@ protected:
         QIcon ic = icon();
         if (!ic.isNull())
         {
-            QPixmap pix = ic.pixmap(iconSize, iconSize);
+            // QIcon::pixmap() refuses to upscale a small source pixmap (NDS
+            // icons are natively 32x32) past its original resolution, to
+            // avoid handing back something blurry by default - so it was
+            // silently returning a 32x32/64x64 pixmap no matter how large
+            // iconSize was set to. Fetch the source at its native size,
+            // then explicitly scale it up ourselves with smooth
+            // interpolation to actually fill the intended area.
+            QPixmap srcPix = ic.pixmap(ic.availableSizes().isEmpty() ? QSize(iconSize, iconSize) : ic.availableSizes().first());
+            QPixmap pix = srcPix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
             qreal ix = iconArea.center().x() - pix.width() / 2.0;
             qreal iy = iconArea.center().y() - pix.height() / 2.0;
