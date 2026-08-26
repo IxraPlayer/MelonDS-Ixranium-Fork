@@ -190,7 +190,7 @@ protected:
         // Icon fills most of the space between the tile's top edge and the
         // title text at the bottom, rather than a small fixed 64px glyph
         // sitting near the top - reads much better on the card layout.
-        const int iconSize = 96;
+        const int iconSize = 128;
         QIcon ic = icon();
         if (!ic.isNull())
         {
