@@ -818,9 +818,17 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
         setMenuBar(menubar);
         // The native menu bar stays alive (actions/shortcuts/checked-state
-        // all live on it) but is drawn with zero height -- the visible menu
-        // row is our own TopMenuBar, built from the same QMenus below.
-        menubar->setFixedHeight(0);
+        // all live on it) but isn't shown -- the visible menu row is our
+        // own TopMenuBar, built from the same QMenus above.
+        // setFixedHeight(0) alone still left a visible gap: QMainWindow
+        // always docks the menu bar above every toolbar (including our
+        // CustomTitleBar toolbar), and the native style's own menu-bar
+        // frame/panel padding was rendered regardless of the widget's
+        // content height, showing up as an empty black strip above the
+        // title bar. Actually hiding it removes it from QMainWindow's
+        // layout entirely, so no frame padding is reserved for it at all.
+        menubar->setMaximumHeight(0);
+        menubar->hide();
 
         if (localCfg.GetString("Firmware.Username") == "Arisotura")
             actMPNewInstance->setText("Fart");
