@@ -121,7 +121,10 @@ DefaultList<std::string> DefaultStrings =
 {
     {"DLDI.ImagePath",                  "dldi.bin"},
     {"DSi.SD.ImagePath",                "dsisd.bin"},
-    {"Instance*.Firmware.Username",     "MelonDS - Ixranium Fork"}
+    {"Instance*.Firmware.Username",     "Ixranium"} // must stay <=10 UTF-16 chars: this is written
+                                                     // straight into the DS firmware's fixed-size
+                                                     // Nickname field (see EmuInstance.cpp), which
+                                                     // silently truncates anything longer
 };
 
 DefaultList<double> DefaultDoubles =

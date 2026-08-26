@@ -22,6 +22,7 @@
 #include <optional>
 #include <deque>
 #include <map>
+#include <atomic>
 
 #include <QWidget>
 #include <QImage>
@@ -84,7 +85,13 @@ private slots:
     void onAutoScreenSizingChanged(int sizing);
 
 protected:
-    bool debugOverlayVisible_;
+    // Written from EmuThread (via EmuInstance::toggleDebugOverlay() ->
+    // MainWindow::toggleDebugOverlay() -> setDebugOverlayVisible(), a plain
+    // direct cross-thread call, not a queued connection) and read from the
+    // GUI/render thread in debugOverlayTick()/paintEvent(). A plain bool here
+    // would be an unsynchronized data race; atomic<bool> makes the read/write
+    // well-defined without needing a mutex for a single flag.
+    std::atomic<bool> debugOverlayVisible_;
 
 
     MainWindow* mainWindow;

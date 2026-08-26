@@ -345,6 +345,10 @@ void TopMenuButton::mousePressEvent(QMouseEvent* event)
         {
             setDown(true);
             m_dropMenu->popup(mapToGlobal(QPoint(0, height())));
+            // popup() grabs the mouse, so this widget will never see the
+            // matching mouseReleaseEvent -- undo the "press" nudge now
+            // instead of waiting for a release that isn't coming.
+            move(pos().x(), pos().y() - 1);
         }
         event->accept();
         return;

@@ -89,12 +89,21 @@ InterfaceSettingsDialog::InterfaceSettingsDialog(QWidget* parent) : QDialog(pare
 
     QString cfgLang = cfg.GetQString("Language");
 
+    // Populating the combo box (and pre-selecting the saved language) fires
+    // currentIndexChanged on its own -- once when the first item is added
+    // (index goes from -1 to 0) and again from setCurrentIndex() below.
+    // Without blocking signals here, on_cbxUILanguage_currentIndexChanged()
+    // reacts to that as if the user had changed the language, and shows the
+    // "restart required" note the instant this dialog opens, even if the
+    // user never touches the dropdown. Verified with a standalone Qt6 repro.
+    ui->cbxUILanguage->blockSignals(true);
     for (int i = 0; i < languages.length(); i++)
     {
         ui->cbxUILanguage->addItem(languages[i].first, languages[i].second);
         if (languages[i].second == cfgLang)
             ui->cbxUILanguage->setCurrentIndex(i);
     }
+    ui->cbxUILanguage->blockSignals(false);
 }
 
 InterfaceSettingsDialog::~InterfaceSettingsDialog()

@@ -94,6 +94,7 @@
 #include <QDir>
 #include <QCheckBox>
 #include <QFile>
+#include <QCryptographicHash>
 #include <QTextStream>
 #include <QRegularExpression>
 #include <QStandardPaths>
@@ -1666,9 +1667,44 @@ QString MainWindow::installGameToLibrary(const QStringList& file)
     QString destPath = gamesDir.filePath(srcInfo.fileName());
     if (QFile::exists(destPath))
     {
-        // A file with this name is already installed; assume it's the same
-        // game and just point the library at it instead of overwriting.
-        return destPath;
+        // A file with this name is already installed. That's only safe to
+        // reuse if it's actually the SAME game -- two unrelated ROMs (very
+        // common with homebrew/fan-translation files, which often share
+        // generic names like "game.nds") can easily collide on filename
+        // alone. Compare by size first (cheap), then by content hash, and
+        // only treat it as "already installed" if the bytes actually match.
+        // Otherwise, install alongside it under a disambiguated name.
+        QFileInfo destInfo(destPath);
+        bool sameFile = false;
+        if (destInfo.size() == srcInfo.size())
+        {
+            QFile srcFile(srcPath);
+            QFile destFile(destPath);
+            if (srcFile.open(QIODevice::ReadOnly) && destFile.open(QIODevice::ReadOnly))
+            {
+                QCryptographicHash srcHash(QCryptographicHash::Sha256);
+                QCryptographicHash destHash(QCryptographicHash::Sha256);
+                srcHash.addData(&srcFile);
+                destHash.addData(&destFile);
+                sameFile = (srcHash.result() == destHash.result());
+            }
+        }
+
+        if (sameFile)
+            return destPath;
+
+        // Different game, same filename: find a free "name (2).ext",
+        // "name (3).ext", etc. instead of silently reusing the wrong file.
+        QString base = srcInfo.completeBaseName();
+        QString ext = srcInfo.suffix();
+        int counter = 2;
+        do
+        {
+            QString candidate = ext.isEmpty() ? QString("%1 (%2)").arg(base).arg(counter)
+                                               : QString("%1 (%2).%3").arg(base).arg(counter).arg(ext);
+            destPath = gamesDir.filePath(candidate);
+            counter++;
+        } while (QFile::exists(destPath));
     }
 
     if (!QFile::copy(srcPath, destPath))
@@ -1798,7 +1834,16 @@ void MainWindow::createDesktopShortcut(const QString& gameName, const QString& g
     // IPersistFile COM objects directly avoids all of that -- no
     // subprocess, no quoting, no policy to trip over.
     HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    bool needUninit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+    // RPC_E_CHANGED_MODE means COM was already initialized on this thread in
+    // a DIFFERENT concurrency mode by someone else (e.g. Qt's own Windows
+    // platform plugin, or another library) -- this call didn't actually
+    // initialize anything and doesn't own a reference to release. Calling
+    // CoUninitialize() in that case would tear down COM out from under
+    // whichever code already had it initialized, causing unrelated,
+    // hard-to-diagnose failures elsewhere (drag&drop, native file dialogs,
+    // WASAPI audio, etc). Only SUCCEEDED(hr) (S_OK or S_FALSE) means this
+    // call actually holds a reference that needs to be released.
+    bool needUninit = SUCCEEDED(hr);
 
     IShellLinkW* shellLink = nullptr;
     hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
