@@ -127,7 +127,7 @@ static QColor hueShifted(const QColor& c, int deltaDeg)
 // makes that entire class of bug impossible: the layout never sees a
 // size change, so it never has a reason to move or drop anything.
 static const int kCardVisualSize = 140;
-static const int kCardHoverPad = 8; // >= half of (140 * 0.08) growth, rounded up
+static const int kCardHoverPad = 12; // >= half of (140 * 0.16) growth, rounded up
 static const int kCardFootprint = kCardVisualSize + kCardHoverPad * 2;
 
 class GameCardButton : public QToolButton
@@ -162,7 +162,7 @@ protected:
         raise(); // draw over neighboring cards instead of being clipped/overlapped by them
         scaleAnim->stop();
         scaleAnim->setStartValue(hoverScale);
-        scaleAnim->setEndValue(1.08);
+        scaleAnim->setEndValue(1.16);
         scaleAnim->start();
     }
 
@@ -243,7 +243,7 @@ protected:
         // sitting near the top - reads much better on the card layout.
         // Icon fills most of the space between the tile's top edge and the
         // title text at the bottom, without crowding into the text itself.
-        const int iconSize = 72;
+        const int iconSize = 48;
         QIcon ic = icon();
         if (!ic.isNull())
         {
@@ -270,7 +270,7 @@ protected:
             // the tile outline - clip the pixmap to a rounded rect before
             // drawing rather than drawing it square.
             QPainterPath iconClip;
-            iconClip.addRoundedRect(QRectF(ix, iy, pix.width(), pix.height()), 10, 10);
+            iconClip.addRoundedRect(QRectF(ix, iy, pix.width(), pix.height()), 15, 15);
             painter.save();
             painter.setClipPath(iconClip, Qt::IntersectClip);
             painter.drawPixmap(QPointF(ix, iy), pix);
