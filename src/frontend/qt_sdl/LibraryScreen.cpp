@@ -33,6 +33,57 @@
 // press-and-drag reorder within the library grid.
 static const char* kGameDragMime = "application/x-melonds-game-path";
 
+// Scale2x (AdvMAME2x): doubles a pixel-art image's resolution while
+// keeping edges crisp - unlike a plain smooth/bilinear upscale (which
+// blurs everything) or nearest-neighbor (which just makes each pixel a
+// bigger flat square with stair-stepped diagonals), this looks at each
+// pixel's 4 direct neighbors and, where there's a clear diagonal
+// transition, extends it into the new pixels instead of the neighbors
+// simply being duplicated. That's what actually "connects" a diagonal
+// line into a smooth diagonal edge rather than a staircase, which is
+// exactly what pixel-art icons need when blown up several times over.
+static QImage scale2x(const QImage& srcIn)
+{
+    QImage src = srcIn.convertToFormat(QImage::Format_ARGB32);
+    int w = src.width(), h = src.height();
+    QImage dst(w * 2, h * 2, QImage::Format_ARGB32);
+
+    auto at = [&](int x, int y) -> QRgb
+    {
+        x = std::clamp(x, 0, w - 1);
+        y = std::clamp(y, 0, h - 1);
+        return src.pixel(x, y);
+    };
+
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            QRgb B = at(x, y - 1);
+            QRgb D = at(x - 1, y);
+            QRgb E = at(x, y);
+            QRgb F = at(x + 1, y);
+            QRgb H = at(x, y + 1);
+
+            QRgb E0 = E, E1 = E, E2 = E, E3 = E;
+            if (B != H && D != F)
+            {
+                E0 = (D == B) ? D : E;
+                E1 = (B == F) ? F : E;
+                E2 = (D == H) ? D : E;
+                E3 = (H == F) ? F : E;
+            }
+
+            dst.setPixel(x * 2,     y * 2,     E0);
+            dst.setPixel(x * 2 + 1, y * 2,     E1);
+            dst.setPixel(x * 2,     y * 2 + 1, E2);
+            dst.setPixel(x * 2 + 1, y * 2 + 1, E3);
+        }
+    }
+
+    return dst;
+}
+
 // Rotates a color's hue by the given number of degrees, leaving near-gray
 // (low-saturation) colors like white/black untouched so text and glass
 // panels don't pick up a tint. This is how the single set of hand-tuned
@@ -190,19 +241,27 @@ protected:
         // Icon fills most of the space between the tile's top edge and the
         // title text at the bottom, rather than a small fixed 64px glyph
         // sitting near the top - reads much better on the card layout.
-        const int iconSize = 128;
+        // Icon fills most of the space between the tile's top edge and the
+        // title text at the bottom, without crowding into the text itself.
+        const int iconSize = 84;
         QIcon ic = icon();
         if (!ic.isNull())
         {
             // QIcon::pixmap() refuses to upscale a small source pixmap (NDS
-            // icons are natively 32x32) past its original resolution, to
-            // avoid handing back something blurry by default - so it was
-            // silently returning a 32x32/64x64 pixmap no matter how large
-            // iconSize was set to. Fetch the source at its native size,
-            // then explicitly scale it up ourselves with smooth
-            // interpolation to actually fill the intended area.
+            // icons are natively 32x32) past its original resolution, so a
+            // plain ic.pixmap(iconSize,...) silently ignored iconSize. Grab
+            // the native-resolution source, run it through Scale2x twice
+            // (4x total - 32px source covers our display sizes without a
+            // further blurry smooth upscale on top), then only downscale
+            // with SmoothTransformation if the result is still bigger than
+            // needed, which - going down, not up - doesn't reintroduce blur
+            // the way upscaling did.
             QPixmap srcPix = ic.pixmap(ic.availableSizes().isEmpty() ? QSize(iconSize, iconSize) : ic.availableSizes().first());
-            QPixmap pix = srcPix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            QImage img = srcPix.toImage();
+            QImage scaled = scale2x(scale2x(img)); // 4x
+            QPixmap pix = QPixmap::fromImage(scaled);
+            if (pix.width() > iconSize || pix.height() > iconSize)
+                pix = pix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
             QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
             qreal ix = iconArea.center().x() - pix.width() / 2.0;
             qreal iy = iconArea.center().y() - pix.height() / 2.0;
