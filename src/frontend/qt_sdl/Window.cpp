@@ -328,6 +328,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 {
 
     showOSD = windowCfg.GetBool("ShowOSD");
+    showKeyboardPreview = windowCfg.GetBool("ShowKeyboardPreview");
 
     setWindowTitle("MelonDS - Ixranium Fork " MELONDS_VERSION);
     setAttribute(Qt::WA_DeleteOnClose);
@@ -744,6 +745,10 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actShowOSD = menu->addAction(tr("Show OSD"));
             actShowOSD->setCheckable(true);
             connect(actShowOSD, &QAction::triggered, this, &MainWindow::onChangeShowOSD);
+
+            actShowKeyboardPreview = menu->addAction(tr("Show keyboard preview"));
+            actShowKeyboardPreview->setCheckable(true);
+            connect(actShowKeyboardPreview, &QAction::triggered, this, &MainWindow::onChangeShowKeyboardPreview);
         }
         {
             QMenu * menu = menubar->addMenu(tr("Config"));
@@ -983,6 +988,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
         actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
         actShowOSD->setChecked(showOSD);
+        actShowKeyboardPreview->setChecked(showKeyboardPreview);
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
         actAudioSync->setChecked(emuInstance->doAudioSync);
@@ -1036,6 +1042,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             globalCfg.SetBool("OnboardingDone", true);
         });
     }
+
+    // In-game keyboard mapping preview (bottom-right corner), independent of
+    // the pause menu's own copy - toggled from View > Show keyboard preview.
+    liveKeyboardPreview = new KeyboardPreviewWidget(nullptr);
+    liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    liveKeyboardPreview->setAttribute(Qt::WA_TranslucentBackground);
+    liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents); // click-through, purely visual
+    liveKeyboardPreview->setAttribute(Qt::WA_ShowWithoutActivating);
+    liveKeyboardPreview->setFixedSize(400, 140);
+    liveKeyboardPreview->refreshFromInstance(emuInstance);
+    positionLiveKeyboardPreview();
+    liveKeyboardPreview->setVisible(showKeyboardPreview);
 }
 
 MainWindow::~MainWindow()
@@ -1045,6 +1063,9 @@ MainWindow::~MainWindow()
         delete[] actScreenAspectTop;
         delete[] actScreenAspectBot;
     }
+
+    delete liveKeyboardPreview;
+    liveKeyboardPreview = nullptr;
 }
 
 void MainWindow::osdAddMessage(unsigned int color, const char* msg)
@@ -1301,12 +1322,26 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
     // TODO!! REMOVE ME IN RELEASE BUILDS!!
     //if (event->key() == Qt::Key_F11) emuInstance->getNDS()->debug(0);
 
+    if (liveKeyboardPreview && showKeyboardPreview)
+    {
+        int raw = event->key();
+        if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
+        liveKeyboardPreview->setKeyState(raw, true);
+    }
+
     emuInstance->onKeyPress(event);
 }
 
 void MainWindow::keyReleaseEvent(QKeyEvent* event)
 {
     if (event->isAutoRepeat()) return;
+
+    if (liveKeyboardPreview && showKeyboardPreview)
+    {
+        int raw = event->key();
+        if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
+        liveKeyboardPreview->setKeyState(raw, false);
+    }
 
     emuInstance->onKeyRelease(event);
 }
@@ -2682,6 +2717,7 @@ void MainWindow::onOpenInputConfig()
 void MainWindow::onInputConfigFinished(int res)
 {
     emuThread->emuUnpause();
+    if (liveKeyboardPreview) liveKeyboardPreview->refreshFromInstance(emuInstance);
 }
 
 void MainWindow::onOpenVideoSettings()
@@ -2950,6 +2986,18 @@ void MainWindow::onChangeShowOSD(bool checked)
     windowCfg.SetBool("ShowOSD", showOSD);
 }
 
+void MainWindow::onChangeShowKeyboardPreview(bool checked)
+{
+    showKeyboardPreview = checked;
+    windowCfg.SetBool("ShowKeyboardPreview", showKeyboardPreview);
+    if (liveKeyboardPreview)
+    {
+        if (checked) liveKeyboardPreview->refreshFromInstance(emuInstance);
+        liveKeyboardPreview->setVisible(checked);
+        positionLiveKeyboardPreview();
+    }
+}
+
 void MainWindow::onChangeLimitFramerate(bool checked)
 {
     emuInstance->doLimitFPS = checked;
@@ -3038,12 +3086,22 @@ void MainWindow::resizeEvent(QResizeEvent* event)
     if (resizeGrips) resizeGrips->updateGeometry();
     positionTopMenuRestoreBtn();
     if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
+    positionLiveKeyboardPreview();
 }
 
 void MainWindow::moveEvent(QMoveEvent* event)
 {
     QMainWindow::moveEvent(event);
     if (pauseMenuOverlay) pauseMenuOverlay->setGeometry(QRect(mapToGlobal(QPoint(0, 0)), size()));
+    positionLiveKeyboardPreview();
+}
+
+void MainWindow::positionLiveKeyboardPreview()
+{
+    if (!liveKeyboardPreview) return;
+    QPoint corner = mapToGlobal(QPoint(width() - liveKeyboardPreview->width() - 16,
+                                        height() - liveKeyboardPreview->height() - 16));
+    liveKeyboardPreview->move(corner);
 }
 
 #ifdef Q_OS_WIN

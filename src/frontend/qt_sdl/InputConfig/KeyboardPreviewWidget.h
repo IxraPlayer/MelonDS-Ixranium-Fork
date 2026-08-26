@@ -21,6 +21,7 @@
 
 #include <QWidget>
 #include <QMap>
+#include <QSet>
 #include <QString>
 #include <vector>
 
@@ -42,6 +43,12 @@ public:
     // repaints. Call this whenever the mapping may have changed (e.g. on
     // pause-menu open) since this widget doesn't listen for changes itself.
     void refreshFromInstance(EmuInstance* inst);
+
+    // Marks a physical key as currently held down (or released) so it can
+    // glow yellow in real time. rawQtKeyWithMods should be event->key()
+    // OR'd with Qt::KeypadModifier when it came from the numpad, so the
+    // numpad cluster and the digit row light up independently.
+    void setKeyState(int rawQtKeyWithMods, bool pressed);
 
     QSize sizeHint() const override;
 
@@ -71,6 +78,10 @@ private:
     // numpad block specifically rather than the digit row.
     QMap<int, QStringList> boundKeys;
     QMap<int, QStringList> boundNumpadKeys;
+
+    // currently physically held-down keys, for the yellow "live" glow
+    QSet<int> pressedBase;
+    QSet<int> pressedNumpadBase;
 };
 
 #endif // KEYBOARDPREVIEWWIDGET_H

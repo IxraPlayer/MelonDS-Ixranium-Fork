@@ -168,7 +168,10 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
     };
 
     for (int i = 0; i < 12; i++)
-        record(QString::fromUtf8(EmuInstance::buttonNames[i]), keycfg.GetInt(EmuInstance::buttonNames[i]));
+    {
+        QString label = QString::fromUtf8(EmuInstance::buttonNames[i]) + QStringLiteral(" (DS tuşu)");
+        record(label, keycfg.GetInt(EmuInstance::buttonNames[i]));
+    }
 
     auto niceHotkeyLabel = [&](int hk) -> QString
     {
@@ -181,8 +184,20 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
     };
 
     for (int hk = 0; hk < HK_MAX; hk++)
-        record(niceHotkeyLabel(hk), keycfg.GetInt(EmuInstance::hotkeyNames[hk]));
+    {
+        QString label = niceHotkeyLabel(hk) + QStringLiteral(" (Kısayol)");
+        record(label, keycfg.GetInt(EmuInstance::hotkeyNames[hk]));
+    }
 
+    update();
+}
+
+void KeyboardPreviewWidget::setKeyState(int rawQtKeyWithMods, bool pressed)
+{
+    int base = baseKeyOf(rawQtKeyWithMods);
+    QSet<int>& set = isNumpadOf(rawQtKeyWithMods) ? pressedNumpadBase : pressedBase;
+    if (pressed) set.insert(base);
+    else         set.remove(base);
     update();
 }
 
@@ -267,8 +282,15 @@ void KeyboardPreviewWidget::paintEvent(QPaintEvent*)
         QRectF r(c.rect.x()/100.0*s, c.rect.y()/100.0*s, c.rect.width()/100.0*s, c.rect.height()/100.0*s);
 
         bool bound = !controlsForCell(c).isEmpty();
+        int base = baseKeyOf(c.qtKey);
+        bool pressed = isNumpadOf(c.qtKey) ? pressedNumpadBase.contains(base) : pressedBase.contains(base);
 
-        if (bound)
+        if (pressed)
+        {
+            p.setPen(QPen(QColor(255, 225, 120), 1.4));
+            p.setBrush(QColor(235, 190, 40, 230));
+        }
+        else if (bound)
         {
             p.setPen(QPen(QColor(120, 180, 255), 1.2));
             p.setBrush(QColor(60, 120, 220, 200));
@@ -281,7 +303,7 @@ void KeyboardPreviewWidget::paintEvent(QPaintEvent*)
 
         p.drawRoundedRect(r, 3, 3);
 
-        p.setPen(bound ? QColor(255, 255, 255) : QColor(255, 255, 255, 110));
+        p.setPen((pressed || bound) ? QColor(255, 255, 255) : QColor(255, 255, 255, 110));
         p.drawText(r, Qt::AlignCenter, c.label);
     }
 }

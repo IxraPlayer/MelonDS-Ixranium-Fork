@@ -190,6 +190,20 @@ void InputConfigDialog::on_cbxControlPreset_currentIndexChanged(int idx)
 
     for (KeyMapButton* btn : keypadKeyButtons)
         if (btn) btn->refresh();
+
+    // Write straight through to config instead of waiting for OK: picking a
+    // preset is a decisive action on its own, and previously it only lived
+    // in this dialog's in-memory arrays, so it was lost if the dialog was
+    // closed any way other than clicking OK (Esc, Cancel, the X button...).
+    Config::Table& instcfg = emuInstance->getLocalConfig();
+    Config::Table keycfg = instcfg.GetTable("Keyboard");
+    for (int k = 0; k < keypad_num; k++)
+    {
+        const char* btn = EmuInstance::buttonNames[dskeyorder[k]];
+        keycfg.SetInt(btn, keypadKeyMap[k]);
+    }
+    Config::Save();
+    emuInstance->inputLoadConfig();
 }
 
 void InputConfigDialog::populatePage(QWidget* page,

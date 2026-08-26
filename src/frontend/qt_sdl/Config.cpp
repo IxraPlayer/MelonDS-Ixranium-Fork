@@ -102,6 +102,7 @@ DefaultList<bool> DefaultBools =
     {"3D.GL.HiresCoordinates", true},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
+    {"Instance*.Window*.ShowKeyboardPreview", false},
     {"Emu.DirectBoot", true},
     {"Instance*.DS.Battery.LevelOkay", true},
     {"Instance*.DSi.Battery.Charging", true},

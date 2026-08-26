@@ -108,6 +108,7 @@ protected:
 
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
+    void positionLiveKeyboardPreview();
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
@@ -197,6 +198,7 @@ private slots:
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
     void onChangeShowOSD(bool checked);
+    void onChangeShowKeyboardPreview(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
 
@@ -234,6 +236,7 @@ private:
     bool lanWarning(bool host);
 
     bool showOSD;
+    bool showKeyboardPreview;
 
     bool hasOGL;
 
@@ -272,6 +275,7 @@ public:
     // separate widget file - it's just a handful of buttons on a dimmed
     // background.
     QWidget* pauseMenuOverlay = nullptr;
+    class KeyboardPreviewWidget* liveKeyboardPreview = nullptr;
     void togglePauseMenu();
     void closePauseMenu();
     QStackedWidget* centralStack = nullptr;
@@ -347,6 +351,7 @@ public:
     QAction* actNewWindow;
     QAction* actScreenFiltering;
     QAction* actShowOSD;
+    QAction* actShowKeyboardPreview;
     QAction* actLimitFramerate;
     QAction* actAudioSync;
 
