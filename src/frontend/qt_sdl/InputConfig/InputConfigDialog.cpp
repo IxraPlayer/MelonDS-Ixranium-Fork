@@ -128,11 +128,9 @@ void InputConfigDialog::setupKeypadPage()
         delete pushButtonKey;
         delete pushButtonJoy;
 
-        // dskeylabels[i]: "Up"=6, "Left"=4, "Right"=5, "Down"=7 -> keep track for control presets
-        if      (dskeylabels[i] == std::string("Up"))    dpadKeyButtons[0] = keyMapButtonKey;
-        else if (dskeylabels[i] == std::string("Left"))  dpadKeyButtons[1] = keyMapButtonKey;
-        else if (dskeylabels[i] == std::string("Right")) dpadKeyButtons[2] = keyMapButtonKey;
-        else if (dskeylabels[i] == std::string("Down"))  dpadKeyButtons[3] = keyMapButtonKey;
+        // dskeylabels[i] order (A,B,X,Y,Left,Right,Up,Down,L,R,Select,Start) matches
+        // keypadKeyMap[i], so we can just keep the button by index for control presets.
+        keypadKeyButtons[i] = keyMapButtonKey;
 
         if (ui->cbxJoystick->isEnabled())
         {
@@ -140,9 +138,6 @@ void InputConfigDialog::setupKeypadPage()
         }
     }
 }
-
-// index into keypadKeyMap/dskeylabels for each D-Pad direction
-static constexpr int kIdxUp = 6, kIdxLeft = 4, kIdxRight = 5, kIdxDown = 7;
 
 void InputConfigDialog::setupControlPresets()
 {
@@ -160,14 +155,26 @@ void InputConfigDialog::setupControlPresets()
             this, &InputConfigDialog::on_cbxControlPreset_currentIndexChanged);
 }
 
+// Order must match ControlPreset's fields (A,B,X,Y,Left,Right,Up,Down,L,R,Select,Start),
+// which is also keypadKeyMap's order.
+static int presetValueAt(const ControlPreset& p, int i)
+{
+    const int vals[keypad_num] = { p.a, p.b, p.x, p.y, p.left, p.right,
+                                    p.up, p.down, p.l, p.r, p.select, p.start };
+    return vals[i];
+}
+
 int InputConfigDialog::detectControlPreset()
 {
     for (int i = 0; i < (int)std::size(control_presets); i++)
     {
         const ControlPreset& p = control_presets[i];
-        if (keypadKeyMap[kIdxUp] == p.up && keypadKeyMap[kIdxLeft] == p.left &&
-            keypadKeyMap[kIdxRight] == p.right && keypadKeyMap[kIdxDown] == p.down)
-            return i;
+        bool match = true;
+        for (int k = 0; k < keypad_num; k++)
+        {
+            if (keypadKeyMap[k] != presetValueAt(p, k)) { match = false; break; }
+        }
+        if (match) return i;
     }
     return control_presets_custom_index;
 }
@@ -178,12 +185,10 @@ void InputConfigDialog::on_cbxControlPreset_currentIndexChanged(int idx)
     if (idx < 0 || idx >= (int)std::size(control_presets)) return; // "Özel" selected, nothing to apply
 
     const ControlPreset& p = control_presets[idx];
-    keypadKeyMap[kIdxUp]    = p.up;
-    keypadKeyMap[kIdxLeft]  = p.left;
-    keypadKeyMap[kIdxRight] = p.right;
-    keypadKeyMap[kIdxDown]  = p.down;
+    for (int k = 0; k < keypad_num; k++)
+        keypadKeyMap[k] = presetValueAt(p, k);
 
-    for (KeyMapButton* btn : dpadKeyButtons)
+    for (KeyMapButton* btn : keypadKeyButtons)
         if (btn) btn->refresh();
 }
 

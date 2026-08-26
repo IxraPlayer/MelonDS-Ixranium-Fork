@@ -94,27 +94,42 @@ static constexpr std::initializer_list<const char*> hk_general_labels =
 
 static_assert(hk_general.size() == hk_general_labels.size());
 
-// D-Pad control scheme presets.
-// Each entry gives the Qt::Key_* value used for Up/Left/Right/Down, in that order.
-// Only the D-Pad is touched; A/B/X/Y/L/R/Select/Start stay whatever the user set them to.
+// Full-keypad control scheme presets.
+// Field order MUST match dskeylabels/keypadKeyMap order:
+// A, B, X, Y, Left, Right, Up, Down, L, R, Select, Start.
 struct ControlPreset
 {
     const char* name;
-    int up, left, right, down;
+    int a, b, x, y, left, right, up, down, l, r, select, start;
 };
+
+#define NUMPAD(k) (Qt::Key_##k | Qt::KeypadModifier)
 
 static constexpr ControlPreset control_presets[] =
 {
-    // "Original" mirrors melonDS' historical default: arrow keys.
-    { "Orijinal (Ok Tuşları)", Qt::Key_Up,   Qt::Key_Left, Qt::Key_Right, Qt::Key_Down },
-    // WASD movement, matching most PC games' "walk" keys.
-    { "WASD",                  Qt::Key_W,    Qt::Key_A,    Qt::Key_D,     Qt::Key_S },
-    // Numpad direction cluster: big, well-spaced, unambiguous keys.
-    // OR'd with Qt::KeypadModifier so this binds the *numpad* 8/4/6/2 specifically,
+    // Classic melonDS-style layout: arrow keys + X/Z/A/S cluster.
+    { "Orijinal (Ok Tuşları)",
+      /*A*/ Qt::Key_X, /*B*/ Qt::Key_Z, /*X*/ Qt::Key_S, /*Y*/ Qt::Key_A,
+      /*Left*/ Qt::Key_Left, /*Right*/ Qt::Key_Right, /*Up*/ Qt::Key_Up, /*Down*/ Qt::Key_Down,
+      /*L*/ Qt::Key_Q, /*R*/ Qt::Key_W, /*Select*/ Qt::Key_Backspace, /*Start*/ Qt::Key_Return },
+
+    // WASD movement with a right-hand action cluster, matching most PC games.
+    { "WASD",
+      /*A*/ Qt::Key_Space, /*B*/ Qt::Key_Shift, /*X*/ Qt::Key_K, /*Y*/ Qt::Key_J,
+      /*Left*/ Qt::Key_A, /*Right*/ Qt::Key_D, /*Up*/ Qt::Key_W, /*Down*/ Qt::Key_S,
+      /*L*/ Qt::Key_Q, /*R*/ Qt::Key_E, /*Select*/ Qt::Key_Backspace, /*Start*/ Qt::Key_Return },
+
+    // Numpad cluster: direction on 8/4/6/2, actions on the surrounding keys.
+    // OR'd with Qt::KeypadModifier so this binds the *numpad* keys specifically,
     // not the digit row (matches how EmuInstanceInput.cpp/KeyMapButton store captured keys).
-    { "Numpad (8/4/6/2)",      Qt::Key_8 | Qt::KeypadModifier, Qt::Key_4 | Qt::KeypadModifier,
-                                Qt::Key_6 | Qt::KeypadModifier, Qt::Key_2 | Qt::KeypadModifier },
+    { "Numpad",
+      /*A*/ NUMPAD(1), /*B*/ NUMPAD(3), /*X*/ NUMPAD(9), /*Y*/ NUMPAD(7),
+      /*Left*/ NUMPAD(4), /*Right*/ NUMPAD(6), /*Up*/ NUMPAD(8), /*Down*/ NUMPAD(2),
+      /*L*/ NUMPAD(0), /*R*/ Qt::Key_Enter | Qt::KeypadModifier,
+      /*Select*/ NUMPAD(Period), /*Start*/ NUMPAD(5) },
 };
+
+#undef NUMPAD
 static constexpr int control_presets_custom_index = -1;
 
 class KeyMapButton;
@@ -174,9 +189,10 @@ private:
     MainWindow* mainWindow;
     EmuInstance* emuInstance;
 
-    // Up/Left/Right/Down key-mapping buttons, kept around so a preset
-    // switch can refresh their labels immediately.
-    KeyMapButton* dpadKeyButtons[4] = { nullptr, nullptr, nullptr, nullptr };
+    // Keypad key-mapping buttons (A,B,X,Y,Left,Right,Up,Down,L,R,Select,Start —
+    // same order as keypadKeyMap), kept around so a preset switch can refresh
+    // their labels immediately.
+    KeyMapButton* keypadKeyButtons[keypad_num] = {};
     bool applyingPreset = false;
 
     int keypadKeyMap[12], keypadJoyMap[12];
