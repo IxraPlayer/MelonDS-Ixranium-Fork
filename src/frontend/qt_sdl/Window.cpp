@@ -1195,6 +1195,31 @@ void MainWindow::createScreenPanel()
 
     centralStack->setCurrentWidget(showingLibrary ? (QWidget*)library : (QWidget*)panel);
 
+#if defined(Q_OS_WIN)
+    // ScreenPanelGL uses WA_NativeWindow, so it owns a real HWND instead of
+    // being an "alien" raster widget like the library screen's tiles. On
+    // Windows, Qt keeps native and alien sibling widgets in the correct
+    // z-order via an internal SetWindowPos fixup that runs on the next
+    // event loop pass - it isn't guaranteed to have happened yet by the
+    // time setCurrentWidget() above returns. Switching stacks right after
+    // creating/recreating the panel (e.g. changing renderer) can leave the
+    // native HWND behind the previously-shown widget's cached backing
+    // store until something forces a repaint, which is what shows up as
+    // the leftover library tile "ghosting" over the emu screen. Forcing
+    // an explicit hide of the non-current widget plus a deferred repaint
+    // clears it reliably; this glitch doesn't happen on Linux/macOS since
+    // they don't split native vs alien widgets the same way.
+    library->setVisible(showingLibrary);
+    panel->setVisible(!showingLibrary);
+    QWidget* shownWidget = showingLibrary ? (QWidget*)library : (QWidget*)panel;
+    QTimer::singleShot(0, this, [this, shownWidget]()
+    {
+        if (!centralStack) return;
+        shownWidget->raise();
+        centralStack->repaint();
+    });
+#endif
+
     if (hasMenu)
         actScreenFiltering->setEnabled(hasOGL);
     panel->osdSetEnabled(showOSD);
@@ -3290,6 +3315,17 @@ void MainWindow::onEmuStart()
 {
     showingLibrary = false;
     if (centralStack) centralStack->setCurrentWidget(panel);
+#if defined(Q_OS_WIN)
+    // See createScreenPanel() for why this is needed on Windows only.
+    if (library) library->setVisible(false);
+    if (panel) panel->setVisible(true);
+    QTimer::singleShot(0, this, [this]()
+    {
+        if (!panel || !centralStack) return;
+        panel->raise();
+        centralStack->repaint();
+    });
+#endif
 
     if (!hasMenu) return;
 
@@ -3318,6 +3354,17 @@ void MainWindow::onEmuStop()
 {
     showingLibrary = true;
     if (centralStack) centralStack->setCurrentWidget(library);
+#if defined(Q_OS_WIN)
+    // See createScreenPanel() for why this is needed on Windows only.
+    if (panel) panel->setVisible(false);
+    if (library) library->setVisible(true);
+    QTimer::singleShot(0, this, [this]()
+    {
+        if (!library || !centralStack) return;
+        library->raise();
+        centralStack->repaint();
+    });
+#endif
 
     if (!hasMenu) return;
 
