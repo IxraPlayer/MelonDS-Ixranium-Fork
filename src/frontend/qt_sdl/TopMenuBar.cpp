@@ -157,11 +157,16 @@ private:
 #define M_PI 3.14159265358979323846
 #endif
 
-// Blue-through-turquoise only, same band used elsewhere in the UI: 0.50 =
-// cyan/turquoise, 0.66 = blue. Keeps the glow line from ever drifting into
-// red/green/purple.
-static constexpr double kGlowHueMin = 0.50;
-static constexpr double kGlowHueMax = 0.66;
+// Cyan-through-turquoise band, centered on hue 180 (0.50) - the same
+// baseline every AccentHueShift value in LibraryScreen is calibrated
+// against. Previously this was centered on 0.58 (~208 deg), a different
+// baseline than the rest of the UI, so the same AccentHueShift rotated
+// this line to a visibly different hue than everything else (e.g. the
+// red theme's line landed on yellow/orange instead of red). Keeping the
+// same +/-0.08 width but centering on 0.50 keeps the gentle wander while
+// making the rotation land on the correct theme color.
+static constexpr double kGlowHueMin = 0.42;
+static constexpr double kGlowHueMax = 0.58;
 
 // Simple single-color line-art icons drawn in code instead of emoji, so
 // they're always one flat color (emoji glyphs render in their own fixed
@@ -390,7 +395,7 @@ TopMenuButton::~TopMenuButton()
 }
 
 TopMenuBar::TopMenuBar(QWidget* parent) : QWidget(parent),
-    glowHue(0.58), glowTargetHue(0.58), glowRetargetTicks(0)
+    glowHue(0.50), glowTargetHue(0.50), glowRetargetTicks(0)
 {
     setObjectName("topMenuBar");
     setFixedHeight(64);

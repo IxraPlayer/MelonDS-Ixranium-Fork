@@ -382,14 +382,23 @@ int LibraryScreen::AccentHueShift = 0;
 // their settings menus.
 void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
 {
+    // Base accent colors across the app sit at hue 180 (turquoise/cyan).
+    // These deltas are exact rotations from that 180 baseline to each
+    // theme's true target hue, so every themed element (cards, glow
+    // lines, background blobs) lands on the same consistent color
+    // instead of drifting into a neighboring hue:
+    //   red    -> 180 + 180 = 360/0   (pure red)
+    //   green  -> 180 + 300 = 480%360 = 120 (pure green)
+    //   blue   -> 180 +  60 = 240     (pure blue)
+    //   purple -> 180 + 100 = 280     (violet/purple)
     if (qssThemeName == "ixranium_red")
-        AccentHueShift = 188;
+        AccentHueShift = 180;
     else if (qssThemeName == "ixranium_green")
-        AccentHueShift = 318;
+        AccentHueShift = 300;
     else if (qssThemeName == "ixranium_purple")
-        AccentHueShift = 108;
+        AccentHueShift = 100;
     else if (qssThemeName == "ixranium_blue")
-        AccentHueShift = 51;
+        AccentHueShift = 60;
     else
         AccentHueShift = 0; // dark_glass, neo_modern, or unset - keep turquoise default
 }
