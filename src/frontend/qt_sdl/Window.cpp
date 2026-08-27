@@ -749,7 +749,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actScreenFiltering->setCheckable(true);
             connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
 
-            actSharpUpscale = menu->addAction(tr("Sharp upscale (Beta)"));
+            actSharpUpscale = menu->addAction(tr("Optimized Graphics (Beta)"));
             actSharpUpscale->setCheckable(true);
             connect(actSharpUpscale, &QAction::triggered, this, &MainWindow::onChangeSharpUpscale);
 
@@ -3060,23 +3060,54 @@ void MainWindow::onChangeSharpUpscale(bool checked)
     windowCfg.SetBool("SharpUpscale", checked);
     panel->setSharpUpscale(checked);
 
-    // Sharp upscale is a GL-shader-only effect (kScreenFS in main_shaders.h).
-    // ScreenPanelNative (used when the screen display isn't running on
-    // OpenGL) has no shader stage at all, so with GL display off this
-    // setting would silently do nothing. Force GL display on so the toggle
-    // actually works, and do it live via the same glchange path the Video
-    // Settings dialog uses instead of asking for a manual restart.
-    bool glWasForced = false;
-    if (checked && !globalCfg.GetBool("Screen.UseGL")
-               && globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
+    // "Optimized Graphics" is a GL-shader-only effect (kScreenFS in
+    // main_shaders.h) for the 2D screen blit, plus (below) the 3D
+    // renderer's own internal-resolution supersampling. ScreenPanelNative
+    // (used when the screen display isn't running on OpenGL) has no
+    // shader stage at all, so with GL display off this setting would
+    // silently do nothing. Force GL display on so the toggle actually
+    // works, and do it live via the same glchange path the Video Settings
+    // dialog uses instead of asking for a manual restart.
+    bool old_gl = globalCfg.GetBool("Screen.UseGL")
+                || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
+    bool glchangeNeeded = false;
+
+    if (checked)
     {
-        globalCfg.SetBool("Screen.UseGL", true);
-        glWasForced = true;
+        if (!globalCfg.GetBool("Screen.UseGL"))
+        {
+            globalCfg.SetBool("Screen.UseGL", true);
+        }
+
+        // The software 3D renderer draws at native (256x192) resolution
+        // with no antialiasing, which is why every 3D model looks blocky
+        // no matter how much the 2D screen shader sharpens the output -
+        // there's simply no extra geometry detail there to recover.
+        // Switch to the OpenGL 3D renderer so models get supersampled at
+        // a higher internal resolution instead.
+        if (globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
+        {
+            globalCfg.SetInt("3D.Renderer", renderer3D_OpenGL);
+        }
+
+        // Bump the 3D internal render resolution (this is what actually
+        // smooths out polygon edges/textures - "GL_ScaleFactor" renders
+        // the 3D scene at NxN the native resolution and downsamples it,
+        // which is effectively supersampled antialiasing) and enable the
+        // higher-quality polygon rasteriser, but don't downgrade a value
+        // the user already set higher manually.
+        if (globalCfg.GetInt("3D.GL.ScaleFactor") < 4)
+            globalCfg.SetInt("3D.GL.ScaleFactor", 4);
+        globalCfg.SetBool("3D.GL.BetterPolygons", true);
     }
 
-    // Plain bilinear "Screen filtering" is redundant on top of sharp
-    // upscale's own edge-directed filtering (and just adds extra blur), so
-    // keep it in sync instead of leaving a conflicting state behind.
+    bool new_gl = globalCfg.GetBool("Screen.UseGL")
+                || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
+    glchangeNeeded = (old_gl != new_gl);
+
+    // Plain bilinear "Screen filtering" is redundant on top of the
+    // edge-directed filtering here (and just adds extra blur), so keep it
+    // in sync instead of leaving a conflicting state behind.
     if (checked && actScreenFiltering->isChecked())
     {
         actScreenFiltering->setChecked(false);
@@ -3084,8 +3115,8 @@ void MainWindow::onChangeSharpUpscale(bool checked)
         panel->setFilter(false);
     }
 
-    if (glWasForced)
-        onUpdateVideoSettings(true);
+    if (checked)
+        onUpdateVideoSettings(glchangeNeeded);
 }
 
 void MainWindow::onChangeShowOSD(bool checked)
