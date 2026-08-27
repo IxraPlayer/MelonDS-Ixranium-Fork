@@ -138,7 +138,7 @@ vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
     // corner rounding wants the corner texel to fully commit to the blend
     // once an edge is confidently detected, otherwise the "2x" look never
     // materialises and it just looks like a faint blur.
-    float blendStrength = smoothstep(0.008, 0.05, edgeMag) * cornerDist * mix(0.55, 1.0, confidence);
+    float blendStrength = smoothstep(0.008, 0.05, edgeMag) * cornerDist * mix(0.75, 1.0, confidence);
 
     // True xBRZ-style corner rounding: blend the diagonal corner texel
     // with the average of both its orthogonal neighbours (not just one
@@ -173,11 +173,11 @@ vec3 sharpenPass(sampler2DArray tex, vec3 uv, vec3 center)
     // axes, which is what was making textures look "flat" before.
     vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
 
-    const float kSharpAmount = 0.9;
+    const float kSharpAmount = 1.3;
     vec3 diff = center - blur;
     // Clamp the push so we sharpen real edges hard without blowing out
     // into visible halos/ringing on high-contrast boundaries.
-    diff = clamp(diff, -0.35, 0.35);
+    diff = clamp(diff, -0.45, 0.45);
     vec3 sharpened = center + diff * kSharpAmount;
     return clamp(sharpened, 0.0, 1.0);
 }
@@ -193,7 +193,7 @@ vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
     // uses, applied to our own shading instead of geometry, and is
     // resolution-independent (scales for free with output/window size
     // instead of needing a fixed "Nx" source-side factor).
-    vec2 o = texel * 0.17;
+    vec2 o = texel * 0.4;
     vec3 s0 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x, -o.y*0.5), uv.z), texSize);
     vec3 s1 = xbrEdgeSample(tex, vec3(uv.xy + vec2( o.x*0.5, -o.y), uv.z), texSize);
     vec3 s2 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x*0.5,  o.y), uv.z), texSize);
