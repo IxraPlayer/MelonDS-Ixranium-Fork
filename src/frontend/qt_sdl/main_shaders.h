@@ -226,12 +226,16 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
     // produced the speckled/dashed white halo along every character
     // outline. Real detail still gets a solid push; already-hard edges
     // don't get pushed any further.
-    ampl = min(ampl, 0.45);
+    // 0.45 -> 0.5: with cleanupPass now tightened below to leave real
+    // edges (like these outlines) alone instead of softening them back
+    // down, there's a bit more headroom here before the halo comes
+    // back - this is the crisper-blacks request from the previous cap.
+    ampl = min(ampl, 0.5);
 
     // sharpness in [0,1] - pulled back down; 0.85 was tuned purely for
     // "does the effect show at all" and turned out too hot once actual
     // sprite line art was on screen.
-    const float sharpness = 0.4;
+    const float sharpness = 0.45;
     float peak = -1.0 / mix(8.0, 5.0, sharpness);
     vec3 cw = ampl * peak;
 
@@ -259,8 +263,14 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
     float diff = distance(result, avg);
     // Only the low end of the difference range gets pulled in - real
     // edges sit well above this and are untouched.
-    float pull = 1.0 - smoothstep(0.015, 0.055, diff);
-    return mix(result, avg, pull * 0.35);
+    // Window narrowed from 0.015-0.055 to 0.02-0.045: black outline
+    // edges sit right at the old window's upper half and were getting
+    // partially softened back down here, undoing some of CAS's work
+    // right where the user wants it crispest. Genuine low-contrast
+    // shader noise (what this pass exists for) is still well below
+    // 0.02, so that cleanup is untouched.
+    float pull = 1.0 - smoothstep(0.02, 0.045, diff);
+    return mix(result, avg, pull * 0.3);
 }
 
 // Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
