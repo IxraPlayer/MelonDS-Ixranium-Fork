@@ -23,7 +23,7 @@
 #include <cmath>
 #include <algorithm>
 #include <QSet>
-#include <QtConcurrent>
+#include <QThread>
 #include <QFutureWatcher>
 
 #include "NDS_Header.h"
