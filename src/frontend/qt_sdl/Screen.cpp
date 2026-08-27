@@ -1027,7 +1027,13 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         QRect screenrc(0, 0, 256, 192);
 
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, sharpUpscale || filter);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, filter);
+        // Note: SmoothPixmapTransform is intentionally NOT enabled for
+        // sharpUpscale. Our own algorithm already smooths the diagonal
+        // edges; stacking Qt's software (non-GL) bilinear scaling on top
+        // of that was extremely CPU-heavy on the raster backend and could
+        // stall the main/GUI thread long enough to look like the whole
+        // window (mouse, keyboard) had frozen.
 
         for (int i = 0; i < numScreens; i++)
         {
