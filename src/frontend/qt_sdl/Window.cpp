@@ -1066,6 +1066,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // There is only ever one window: the same one the game already lives
     // in, so there is nothing left for Windows to treat as a separate app.
     liveKeyboardPreview = new KeyboardPreviewWidget(nullptr);
+    // paintEvent() only ever draws the individual key rects with
+    // semi-transparent brushes - it never fills a full opaque background,
+    // relying on whatever's underneath (previously: a translucent top-level
+    // window) to show through everywhere else. QWidget::render() into a
+    // QImage still defaults to painting an opaque window-background wash
+    // first (that's the "weird blue box" that showed up), so both of these
+    // are needed to stop that: NoSystemBackground/disabled autofill mean
+    // there's no implicit erase-to-palette-color pass, and
+    // refreshLiveKeyboardPreviewImage() also renders with DrawWindowBackground
+    // explicitly left out of the render flags as a second guarantee.
+    liveKeyboardPreview->setAttribute(Qt::WA_NoSystemBackground, true);
+    liveKeyboardPreview->setAutoFillBackground(false);
     liveKeyboardPreview->setFixedSize(400, 140);
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     refreshLiveKeyboardPreviewImage();
@@ -3144,12 +3156,17 @@ void MainWindow::moveEvent(QMoveEvent* event)
 void MainWindow::refreshLiveKeyboardPreviewImage()
 {
     if (!liveKeyboardPreview || !panel) return;
-    // QWidget::grab() renders via QWidget::render() under the hood, which
-    // works perfectly on a widget that has no native window and has never
-    // been shown - it just runs paintEvent() against an offscreen buffer.
-    // That's exactly why this is safe/cheap to call on every key press
-    // instead of needing any "is this actually visible" gating.
-    panel->setKbPreviewImage(liveKeyboardPreview->grab().toImage());
+    // Build our own pre-cleared, real-alpha QImage instead of using
+    // QWidget::grab() (which returns an opaque QPixmap - that's exactly
+    // what was showing up as a solid blue-grey box around the keys).
+    // Filling with Qt::transparent first, then rendering with
+    // DrawWindowBackground deliberately left OUT of the render flags,
+    // means only the key rects paintEvent() actually draws end up
+    // non-transparent - everything else stays true zero-alpha.
+    QImage img(liveKeyboardPreview->size(), QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    liveKeyboardPreview->render(&img, QPoint(), QRegion(), QWidget::RenderFlags(QWidget::DrawChildren));
+    panel->setKbPreviewImage(img);
 }
 
 void MainWindow::updateLiveKeyboardPreviewVisibility()
