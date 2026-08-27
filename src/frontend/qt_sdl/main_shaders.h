@@ -76,10 +76,11 @@ float luma(vec3 c)
 // Anime4K-style "push" (gradient-guided line thinning): estimate the
 // local luminance gradient with a Sobel operator, then step a short
 // distance along that gradient (i.e. across the line/edge) on both
-// sides and pull the centre sample towards whichever side is more
-// extreme relative to it. This is what keeps thin anime-style linework
-// crisp under magnification instead of it smearing into a soft
-// gradient, which is the point of Anime4K's line-thinning pass.
+// sides and blend the centre sample towards whichever side is more
+// extreme relative to it. The blend weight is continuous rather than a
+// hard either/or pick - on near-flat gradients a hard pick flips sign
+// from one pixel (or one frame) to the next and reads as noise/static,
+// so this fades smoothly to "no push at all" as the gradient weakens.
 vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
 {
     vec3 c  = textureOffset(tex, uv, ivec2( 0,  0)).rgb;
@@ -101,27 +102,25 @@ vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
     float gy = (lsw + 2.0*ls + lse) - (lnw + 2.0*ln + lne);
     float gmag = length(vec2(gx, gy));
 
-    if (gmag < 1e-4)
+    // Below this the gradient is just source noise/dither, not a real
+    // line - leave it completely alone rather than pushing it around.
+    if (gmag < 0.05)
         return c;
 
     vec2 dir = vec2(gx, gy) / gmag;
 
-    // The actual "push": look a little further out along the gradient
-    // on each side of the centre texel to see which direction the line
-    // continues towards, rather than only the immediate neighbours.
-    vec3 pushPos = texture(tex, vec3(uv.xy + dir * texel * 1.5, uv.z)).rgb;
-    vec3 pushNeg = texture(tex, vec3(uv.xy - dir * texel * 1.5, uv.z)).rgb;
+    vec3 pushPos = texture(tex, vec3(uv.xy + dir * texel, uv.z)).rgb;
+    vec3 pushNeg = texture(tex, vec3(uv.xy - dir * texel, uv.z)).rgb;
 
     float lc = luma(c), lp = luma(pushPos), lm = luma(pushNeg);
 
-    // Pull the centre towards whichever side of the line is more
-    // extreme relative to it - this is what thins a line down instead
-    // of just blurring across it. Kept subtle: too strong a pull here
-    // drags in wrong-side colour on any real edge and reads as smeared,
-    // haloed artifacting rather than a sharper line.
-    vec3 target = (abs(lp - lc) > abs(lm - lc)) ? pushPos : pushNeg;
+    // Continuous weight towards whichever side is more extreme, instead
+    // of a hard branch - avoids the per-pixel flip-flopping that reads
+    // as parasitic noise on gently sloped edges.
+    float w = clamp(0.5 + (lp - lm) * 2.0, 0.0, 1.0);
+    vec3 target = mix(pushNeg, pushPos, w);
 
-    float strength = smoothstep(0.06, 0.30, gmag) * 0.25;
+    float strength = smoothstep(0.05, 0.35, gmag) * 0.15;
     return mix(c, target, strength);
 }
 
@@ -146,12 +145,12 @@ vec3 refinePass(sampler2DArray tex, vec3 uv, vec3 center)
     // every direction instead of only along the axes.
     vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
 
-    const float kSharpAmount = 0.6;
+    const float kSharpAmount = 0.35;
     // Clamp the push so real edges sharpen without blowing out into
     // visible halos/ringing on high-contrast boundaries - this pass
     // runs on top of the push step above rather than raw source, so it
     // needs a lighter touch than a standalone unsharp mask would.
-    vec3 diff = clamp(center - blur, -0.25, 0.25);
+    vec3 diff = clamp(center - blur, -0.15, 0.15);
     return clamp(center + diff * kSharpAmount, 0.0, 1.0);
 }
 
@@ -160,18 +159,12 @@ vec3 anime4kUpscale(sampler2DArray tex, vec3 uv)
     vec2 texSize = vec2(textureSize(tex, 0).xy);
     vec2 texel = 1.0 / texSize;
 
-    // 4-tap rotated-grid supersampling: evaluate the push estimate at 4
-    // sub-fragment offsets and average - the same trick MSAA uses,
-    // applied to our own shading instead of geometry, and it's
-    // resolution-independent (scales for free with output/window size
-    // instead of needing a fixed "Nx" source-side factor).
-    vec2 o = texel * 0.4;
-    vec3 s0 = anime4kPush(tex, vec3(uv.xy + vec2(-o.x, -o.y*0.5), uv.z), texel);
-    vec3 s1 = anime4kPush(tex, vec3(uv.xy + vec2( o.x*0.5, -o.y), uv.z), texel);
-    vec3 s2 = anime4kPush(tex, vec3(uv.xy + vec2(-o.x*0.5,  o.y), uv.z), texel);
-    vec3 s3 = anime4kPush(tex, vec3(uv.xy + vec2( o.x,  o.y*0.5), uv.z), texel);
-
-    return (s0 + s1 + s2 + s3) * 0.25;
+    // Single centre sample - no multi-tap supersampling. Averaging
+    // several independently-estimated push directions turned out to be
+    // where the flickering/static came from (each sub-sample can pick a
+    // slightly different gradient direction on soft source edges), so
+    // this keeps the estimate to one stable sample per output pixel.
+    return anime4kPush(tex, uv, texel);
 }
 
 void main()
