@@ -3234,6 +3234,13 @@ void MainWindow::applyLiveKeyboardPreviewToolStyle()
     winId(); // make sure MainWindow itself has a native HWND to point to
     HWND mainHwnd = reinterpret_cast<HWND>(winId());
     SetWindowLongPtr(kbHwnd, GWLP_HWNDPARENT, (LONG_PTR)mainHwnd);
+    // SetWindowLongPtr alone does NOT take effect: per MSDN, a GWL_EXSTYLE
+    // (or GWLP_HWNDPARENT) change needs an explicit SetWindowPos with
+    // SWP_FRAMECHANGED afterwards, or Explorer keeps using the taskbar
+    // button/grouping it decided on when the HWND was first created -
+    // which is exactly the "still shows as its own entry" symptom.
+    SetWindowPos(kbHwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 #endif
 
