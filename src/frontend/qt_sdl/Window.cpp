@@ -3100,16 +3100,13 @@ void MainWindow::applyOptimizedGraphics3D()
     // higher-quality polygon rasteriser, but don't downgrade a value
     // the user already set higher manually.
     //
-    // 2x, not 6x: confirmed 6x does fix the jagged 3D models, but its
-    // cost is quadratic (6x = 36x the pixels), which is what was
-    // causing the stutter. This renderer has no real MSAA to fall back
-    // on (checked GPU3D_OpenGL.cpp - supersampling via ScaleFactor is
-    // the only AA path that exists), so 2x (4x the pixels, ~9x cheaper
-    // than 6x) is the practical middle ground: noticeably smoother
-    // than native 1x, without the 6x cost. Still never downgrades a
-    // value the user set higher themselves.
-    if (globalCfg.GetInt("3D.GL.ScaleFactor") < 2)
-        globalCfg.SetInt("3D.GL.ScaleFactor", 2);
+    // Forced to 1x (native), full stop: any factor above 1x changes the
+    // composited framebuffer resolution the 2D screen shader
+    // (main_shaders.h) operates on, which breaks the quality tuning
+    // done there - so Optimized Graphics has to stay at native
+    // resolution on the 3D side, even though that means living with
+    // unsmoothed 3D polygon edges for now.
+    globalCfg.SetInt("3D.GL.ScaleFactor", 1);
     globalCfg.SetBool("3D.GL.BetterPolygons", true);
 
     // Perspective-correct hi-res vertex coordinates: defaults on, but a
