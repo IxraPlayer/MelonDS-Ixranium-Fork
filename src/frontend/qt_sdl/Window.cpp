@@ -29,6 +29,7 @@
 
 #include <QProcess>
 #include <QApplication>
+#include <QPalette>
 #include <QMessageBox>
 #include <QMenuBar>
 #include <QMimeDatabase>
@@ -1066,7 +1067,19 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     liveKeyboardPreview = new KeyboardPreviewWidget(this);
     liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                                          Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
+    // Belt-and-suspenders against a visible rectangular "window" edge:
+    // WA_TranslucentBackground alone can still leave Qt's own backing
+    // store pre-filling this widget's rect with an opaque color on some
+    // platforms/styles before our paintEvent runs, which is exactly what
+    // reads as "a separate window" rather than a borderless in-game
+    // overlay. NoSystemBackground + disabling auto-fill + a transparent
+    // palette make sure nothing but our own hand-drawn keycaps ever paints.
     liveKeyboardPreview->setAttribute(Qt::WA_TranslucentBackground);
+    liveKeyboardPreview->setAttribute(Qt::WA_NoSystemBackground);
+    liveKeyboardPreview->setAutoFillBackground(false);
+    QPalette pal = liveKeyboardPreview->palette();
+    pal.setColor(QPalette::Window, Qt::transparent);
+    liveKeyboardPreview->setPalette(pal);
     liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
     liveKeyboardPreview->setAttribute(Qt::WA_ShowWithoutActivating);
     liveKeyboardPreview->setFixedSize(400, 140);
@@ -3148,10 +3161,16 @@ void MainWindow::moveEvent(QMoveEvent* event)
 void MainWindow::positionLiveKeyboardPreview()
 {
     if (!liveKeyboardPreview) return;
-    // Top-level window now (see the constructor comment for why), so it
-    // needs actual screen coordinates rather than coordinates local to us.
-    QPoint corner = mapToGlobal(QPoint(width() - liveKeyboardPreview->width() - 16,
-                                        height() - liveKeyboardPreview->height() - 16));
+
+    // Anchor to the actual game screen widget, not MainWindow's own outer
+    // rect - MainWindow's height includes the custom title bar/menu bar
+    // chrome above the game area, which used to throw this off (it read
+    // as sitting too low, relative to the visible screen, once this
+    // switched to a real top-level window computing against the wrong
+    // reference size).
+    QWidget* anchor = (panel && panel->isVisible()) ? (QWidget*)panel : (QWidget*)this;
+    QPoint corner = anchor->mapToGlobal(QPoint(anchor->width() - liveKeyboardPreview->width() - 16,
+                                                anchor->height() - liveKeyboardPreview->height() - 16));
     liveKeyboardPreview->move(corner);
     liveKeyboardPreview->raise();
 }
@@ -3163,7 +3182,9 @@ void MainWindow::updateLiveKeyboardPreviewVisibility()
     // hidden while the pause menu is up (which draws its own separate
     // preview - having both on screen at once is what used to overlap).
     bool inGame = !showingLibrary && emuInstance && emuInstance->emuIsActive() && !pauseMenuOverlay;
-    liveKeyboardPreview->setVisible(showKeyboardPreview && inGame);
+    bool visible = showKeyboardPreview && inGame;
+    if (visible) positionLiveKeyboardPreview(); // re-anchor to the panel now that it's actually showing
+    liveKeyboardPreview->setVisible(visible);
 }
 
 void MainWindow::refreshKeyboardPreviews()
