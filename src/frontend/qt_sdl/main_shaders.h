@@ -45,7 +45,7 @@ void main()
 }
 )";
 
-// GPU "Optimized Graphics" pipeline: three proven, complementary
+// GPU "Optimized Graphics" pipeline: four proven, complementary
 // techniques layered on top of each other in a single fragment-shader
 // pass (runs entirely on the GPU as part of the normal screen-blit draw
 // call - no extra render target, no CPU work, no extra thread sync).
@@ -63,9 +63,14 @@ void main()
 //   2) CAS (Contrast Adaptive Sharpening, AMD's algorithm from FSR) -
 //      a min/max-based local-contrast sharpen, amplitude-capped for the
 //      same outline-haloing reason as stage 1.
+//   3) Selective cleanup - a final outlier-suppression pass that mops
+//      up the small amount of residual per-pixel noise the first three
+//      stages can leave near edges, without touching real detail (it
+//      only pulls in pixels close to their own neighbourhood average,
+//      so it can't flatten the image into a "plastic" look).
 //
 // Each stage takes the previous stage's result as its centre sample, so
-// they compound instead of one overwriting another. All three are
+// they compound instead of one overwriting another. All four are
 // purely local, per-pixel, and free of any directional binary choice
 // (no "pick side A or B" branching) - a gradient-direction pick
 // flip-flops on soft edges and reads as flicker/static, so none of
@@ -235,6 +240,29 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
     return clamp(result, 0.0, 1.0);
 }
 
+// Stage 3: selective outlier suppression (final cleanup). After three
+// compounding local-contrast stages, a small number of pixels near
+// edges can end up as a slight outlier relative to their immediate
+// neighbourhood - not a real edge, just leftover noise from the earlier
+// stages compounding. This only touches pixels close to their own
+// neighbourhood average: genuine edges/detail (a big difference from
+// the average) are left completely alone, so this can't flatten real
+// artwork into a flat "plastic" look - it only mops up what's left.
+vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
+{
+    vec3 n = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
+    vec3 s = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
+    vec3 w = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
+    vec3 e = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
+    vec3 avg = (n + s + w + e) * 0.25;
+
+    float diff = distance(result, avg);
+    // Only the low end of the difference range gets pulled in - real
+    // edges sit well above this and are untouched.
+    float pull = 1.0 - smoothstep(0.015, 0.055, diff);
+    return mix(result, avg, pull * 0.35);
+}
+
 void main()
 {
     vec3 rgb;
@@ -247,7 +275,8 @@ void main()
         // against a separately-computed raw-source sharpen - that's
         // what makes both stages actually visible together instead of
         // each cancelling half of the other out.
-        rgb = casSharpen(ScreenTex, fTexcoord, edged);
+        vec3 sharpened = casSharpen(ScreenTex, fTexcoord, edged);
+        rgb = cleanupPass(ScreenTex, fTexcoord, sharpened);
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
