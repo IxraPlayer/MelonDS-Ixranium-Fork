@@ -111,6 +111,12 @@ protected:
     void positionLiveKeyboardPreview();
     void updateLiveKeyboardPreviewVisibility();
     void refreshKeyboardPreviews();
+#ifdef Q_OS_WIN
+    // Tells the shell directly (via ITaskbarList::DeleteTab) that
+    // liveKeyboardPreview's HWND should never get its own taskbar button,
+    // instead of relying on Explorer inferring that from window styles.
+    void removeLiveKeyboardPreviewFromTaskbar();
+#endif
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
