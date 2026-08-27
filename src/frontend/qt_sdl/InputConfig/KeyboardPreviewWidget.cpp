@@ -23,7 +23,6 @@
 #include <QHelpEvent>
 #include <QToolTip>
 #include <QStringList>
-#include <QCursor>
 #include <algorithm>
 
 #include "Config.h"
@@ -47,11 +46,6 @@ KeyboardPreviewWidget::KeyboardPreviewWidget(QWidget* parent) : QWidget(parent)
 {
     setMouseTracking(true);
     buildLayout();
-
-    hoverPollTimer = new QTimer(this);
-    hoverPollTimer->setInterval(80);
-    connect(hoverPollTimer, &QTimer::timeout, this, &KeyboardPreviewWidget::pollHover);
-    hoverPollTimer->start();
 }
 
 QSize KeyboardPreviewWidget::sizeHint() const
@@ -265,8 +259,6 @@ bool KeyboardPreviewWidget::event(QEvent* event)
 {
     if (event->type() == QEvent::ToolTip)
     {
-        // Normal path, used when this widget DOES receive mouse events
-        // (the pause menu's copy - it isn't click-through).
         QHelpEvent* he = static_cast<QHelpEvent*>(event);
         const KeyCell* c = cellAt(he->pos());
         if (c)
@@ -282,35 +274,6 @@ bool KeyboardPreviewWidget::event(QEvent* event)
         return true;
     }
     return QWidget::event(event);
-}
-
-void KeyboardPreviewWidget::pollHover()
-{
-    // Used by the docked in-game overlay, which is click-through
-    // (WA_TransparentForMouseEvents) so it never gets real hover events -
-    // poll the cursor position manually instead.
-    if (!isVisible()) return;
-
-    QPoint local = mapFromGlobal(QCursor::pos());
-    const KeyCell* c = rect().contains(local) ? cellAt(local) : nullptr;
-
-    if (c == lastHoverCell) return;
-    lastHoverCell = c;
-
-    if (!c)
-    {
-        QToolTip::hideText();
-        return;
-    }
-
-    QStringList controls = controlsForCell(*c);
-    if (controls.isEmpty())
-    {
-        QToolTip::hideText();
-        return;
-    }
-
-    QToolTip::showText(QCursor::pos(), controls.join(", "), this);
 }
 
 void KeyboardPreviewWidget::paintEvent(QPaintEvent*)

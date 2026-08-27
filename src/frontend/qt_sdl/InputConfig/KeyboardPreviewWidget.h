@@ -23,7 +23,6 @@
 #include <QMap>
 #include <QSet>
 #include <QString>
-#include <QTimer>
 #include <vector>
 
 class EmuInstance;
@@ -89,15 +88,6 @@ private:
     // currently physically held-down keys, for the yellow "live" glow
     QSet<int> pressedBase;
     QSet<int> pressedNumpadBase;
-
-    // The docked in-game overlay is WA_TransparentForMouseEvents (clicks
-    // must fall through to the DS touch screen underneath), which also
-    // blocks Qt's normal hover/tooltip event delivery. This timer polls
-    // the global cursor instead, so hovering a bound key still shows what
-    // it's bound to even though the widget itself never sees the mouse.
-    QTimer* hoverPollTimer = nullptr;
-    const KeyCell* lastHoverCell = nullptr;
-    void pollHover();
 };
 
 #endif // KEYBOARDPREVIEWWIDGET_H
