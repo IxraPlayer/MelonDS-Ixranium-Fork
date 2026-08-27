@@ -45,18 +45,26 @@ void main()
 }
 )";
 
-// GPU Anime4K-style upscale ("Optimized Graphics"), adapted from the
-// Anime4K family of shaders (gradient-guided line push + refine) into a
-// single fragment-shader pass - runs entirely on the GPU as part of the
-// normal screen-blit draw call, no extra render target, no CPU work, no
-// extra thread synchronisation. Anime4K normally chains several passes
-// (luminance gradient -> push/thin -> refine); here that pipeline is
-// folded into one pass: a Sobel gradient finds each line's direction and
-// strength, a "push" step samples along the gradient normal and pulls
-// the centre texel towards whichever side is more extreme (Anime4K's
-// core line-thinning trick, so linework stays crisp instead of smearing
-// into a flat gradient when magnified), and a refine/unsharp step
-// restores the contrast the gradient step softens. Toggled at runtime
+// GPU "Optimized Graphics" pipeline: two proven, complementary
+// techniques layered on top of each other in a single fragment-shader
+// pass (runs entirely on the GPU as part of the normal screen-blit draw
+// call - no extra render target, no CPU work, no extra thread sync).
+//
+//   1) xBR-style edge-directed upscale - looks at the 3x3 neighbourhood,
+//      finds the local diagonal edge direction from luma differences,
+//      and blends the corner texel towards it with a smooth (never
+//      binary/branching) blend strength. This is what actually improves
+//      pixel-art diagonals instead of leaving them stair-stepped.
+//   2) CAS (Contrast Adaptive Sharpening, AMD's algorithm from FSR) -
+//      a min/max-based local-contrast sharpen. Chosen over a plain
+//      unsharp mask because its weight is derived from and clamped by
+//      the local min/max, which is what keeps it from blowing out into
+//      halos/ringing the way unsharp masks can on high-contrast edges.
+//
+// Both stages are purely local, per-pixel, and free of any directional
+// binary choice (no "pick side A or B" branching) - that's what a
+// gradient-direction pick flip-flops on soft edges and reads as
+// flicker/static, so neither stage here does that. Toggled at runtime
 // via uSharpUpscale so filtering can stay off for users who prefer raw
 // nearest/bilinear.
 const char* kScreenFS = R"(#version 140
@@ -73,16 +81,12 @@ float luma(vec3 c)
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-// Anime4K-style "push" (gradient-guided line thinning): estimate the
-// local luminance gradient with a Sobel operator, then step a short
-// distance along that gradient (i.e. across the line/edge) on both
-// sides and blend the centre sample towards whichever side is more
-// extreme relative to it. The blend weight is continuous rather than a
-// hard either/or pick - on near-flat gradients a hard pick flips sign
-// from one pixel (or one frame) to the next and reads as noise/static,
-// so this fades smoothly to "no push at all" as the gradient weakens.
-vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
+// Stage 1: xBR-style edge-directed corner blend.
+vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize)
 {
+    vec2 pixelPos = uv.xy * texSize;
+    vec2 subpix = fract(pixelPos);
+
     vec3 c  = textureOffset(tex, uv, ivec2( 0,  0)).rgb;
     vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
     vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
@@ -93,78 +97,69 @@ vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
     vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
     vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
 
-    float lnw = luma(nw), ln = luma(n), lne = luma(ne);
-    float lw  = luma(w),                le = luma(e);
-    float lsw = luma(sw), ls = luma(s), lse = luma(se);
+    float lc = luma(c), ln = luma(n), ls = luma(s), lw = luma(w), le = luma(e);
+    float lnw = luma(nw), lne = luma(ne), lsw = luma(sw), lse = luma(se);
 
-    // Sobel gradient - points across the strongest local edge.
-    float gx = (lne + 2.0*le + lse) - (lnw + 2.0*lw + lsw);
-    float gy = (lsw + 2.0*ls + lse) - (lnw + 2.0*ln + lne);
-    float gmag = length(vec2(gx, gy));
+    bvec2 q = greaterThanEqual(subpix, vec2(0.5));
 
-    // Below this the gradient is just source noise/dither, not a real
-    // line - leave it completely alone rather than pushing it around.
-    if (gmag < 0.05)
-        return c;
+    vec3 diagB; vec3 side1, side2;
+    float d1, d2;
 
-    vec2 dir = vec2(gx, gy) / gmag;
+    if (!q.x && !q.y) { diagB = nw; side1 = n; side2 = w;
+                         d1 = abs(lnw - lc) + abs(ln - lw);
+                         d2 = abs(ln - lnw) + abs(lw - lc); }
+    else if (q.x && !q.y) { diagB = ne; side1 = n; side2 = e;
+                         d1 = abs(lne - lc) + abs(ln - le);
+                         d2 = abs(ln - lne) + abs(le - lc); }
+    else if (!q.x && q.y) { diagB = sw; side1 = s; side2 = w;
+                         d1 = abs(lsw - lc) + abs(ls - lw);
+                         d2 = abs(ls - lsw) + abs(lw - lc); }
+    else { diagB = se; side1 = s; side2 = e;
+                         d1 = abs(lse - lc) + abs(ls - le);
+                         d2 = abs(ls - lse) + abs(le - lc); }
 
-    vec3 pushPos = texture(tex, vec3(uv.xy + dir * texel, uv.z)).rgb;
-    vec3 pushNeg = texture(tex, vec3(uv.xy - dir * texel, uv.z)).rgb;
+    // Continuous distance-from-corner falloff - never a hard cutoff, so
+    // there's no per-pixel/per-frame flip to read as noise.
+    float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
+                                        abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
-    float lc = luma(c), lp = luma(pushPos), lm = luma(pushNeg);
+    float edgeMag = min(d1, d2);
+    float blendStrength = smoothstep(0.03, 0.12, edgeMag) * cornerDist * 0.6;
 
-    // Continuous weight towards whichever side is more extreme, instead
-    // of a hard branch - avoids the per-pixel flip-flopping that reads
-    // as parasitic noise on gently sloped edges.
-    float w = clamp(0.5 + (lp - lm) * 2.0, 0.0, 1.0);
-    vec3 target = mix(pushNeg, pushPos, w);
-
-    float strength = smoothstep(0.05, 0.35, gmag) * 0.15;
-    return mix(c, target, strength);
+    vec3 sideAvg = mix(side1, side2, 0.5);
+    vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
+    return mix(c, blendTarget, blendStrength);
 }
 
-// Refine/unsharp pass, run after the push step above - Anime4K's own
-// pipeline ends the same way, since gradient-guided pushing sharpens
-// line direction but softens overall contrast. This restores perceived
-// detail without reintroducing jaggies: it only pushes the
-// already-computed pixel away from its local (low-pass) average, it
-// never samples new high-frequency data, so it can't undo the push step.
-vec3 refinePass(sampler2DArray tex, vec3 uv, vec3 center)
+// Stage 2: CAS (Contrast Adaptive Sharpening). Samples a plus-shaped
+// neighbourhood, derives a per-pixel sharpen weight from the local
+// min/max (so flat areas and already-high-contrast edges naturally get
+// little to no sharpening, only genuine mid-contrast detail does), and
+// folds that weight back in through a normalised blend - this is what
+// keeps CAS from ringing the way a fixed-amount unsharp mask can.
+vec3 casSharpen(sampler2DArray tex, vec3 uv)
 {
-    vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
-    vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
-    vec3 w  = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
-    vec3 e  = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
-    vec3 nw = textureOffset(tex, uv, ivec2(-1, -1)).rgb;
-    vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
-    vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
-    vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
-    // 8-tap (3x3 minus centre) low-pass - a wide, round blur kernel
-    // means the unsharp mask pulls out real texture detail evenly in
-    // every direction instead of only along the axes.
-    vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
+    vec3 a = textureOffset(tex, uv, ivec2( 0, -1)).rgb; // N
+    vec3 b = textureOffset(tex, uv, ivec2(-1,  0)).rgb; // W
+    vec3 e = textureOffset(tex, uv, ivec2( 0,  0)).rgb; // centre
+    vec3 f = textureOffset(tex, uv, ivec2( 1,  0)).rgb; // E
+    vec3 g = textureOffset(tex, uv, ivec2( 0,  1)).rgb; // S
 
-    const float kSharpAmount = 0.35;
-    // Clamp the push so real edges sharpen without blowing out into
-    // visible halos/ringing on high-contrast boundaries - this pass
-    // runs on top of the push step above rather than raw source, so it
-    // needs a lighter touch than a standalone unsharp mask would.
-    vec3 diff = clamp(center - blur, -0.15, 0.15);
-    return clamp(center + diff * kSharpAmount, 0.0, 1.0);
-}
+    vec3 mn = min(min(min(a, b), min(f, g)), e);
+    vec3 mx = max(max(max(a, b), max(f, g)), e);
 
-vec3 anime4kUpscale(sampler2DArray tex, vec3 uv)
-{
-    vec2 texSize = vec2(textureSize(tex, 0).xy);
-    vec2 texel = 1.0 / texSize;
+    vec3 rcpMax = 1.0 / max(mx, vec3(1e-4));
+    vec3 ampl = clamp(min(mn, 2.0 - mx) * rcpMax, 0.0, 1.0);
+    ampl = sqrt(ampl);
 
-    // Single centre sample - no multi-tap supersampling. Averaging
-    // several independently-estimated push directions turned out to be
-    // where the flickering/static came from (each sub-sample can pick a
-    // slightly different gradient direction on soft source edges), so
-    // this keeps the estimate to one stable sample per output pixel.
-    return anime4kPush(tex, uv, texel);
+    // sharpness in [0,1]; 0.5 is a moderate, safe default.
+    const float sharpness = 0.5;
+    float peak = -1.0 / mix(8.0, 5.0, sharpness);
+    vec3 cw = ampl * peak;
+
+    vec3 rcpWeight = 1.0 / (1.0 + 4.0 * cw);
+    vec3 result = (a * cw + b * cw + f * cw + g * cw + e) * rcpWeight;
+    return clamp(result, 0.0, 1.0);
 }
 
 void main()
@@ -172,8 +167,14 @@ void main()
     vec3 rgb;
     if (uSharpUpscale != 0)
     {
-        rgb = anime4kUpscale(ScreenTex, fTexcoord);
-        rgb = refinePass(ScreenTex, fTexcoord, rgb);
+        vec2 texSize = vec2(textureSize(ScreenTex, 0).xy);
+        vec3 edged = edgeUpscale(ScreenTex, fTexcoord, texSize);
+        vec3 sharpened = casSharpen(ScreenTex, fTexcoord);
+        // Layer both stages together rather than one overwriting the
+        // other: the edge-directed blend supplies the diagonal
+        // smoothing, CAS supplies the local-contrast pop, and averaging
+        // them keeps either stage from being fully undone by the other.
+        rgb = mix(edged, sharpened, 0.5);
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
