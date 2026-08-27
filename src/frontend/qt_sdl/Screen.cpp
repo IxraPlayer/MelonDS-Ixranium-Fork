@@ -922,10 +922,11 @@ void ScreenPanel::calcSplashLayout()
 // into the corner - this turns staircase-y diagonal edges into a smoother
 // line without blurring flat-colour areas or losing any colour. Runs on the
 // tiny 256x192 DS framebuffer so the CPU cost is negligible.
-static QImage sharpUpscale2x(const QImage& src)
+static void sharpUpscale2x(const QImage& src, QImage& out)
 {
     const int w = src.width(), h = src.height();
-    QImage out(w * 2, h * 2, QImage::Format_RGB32);
+    if (out.width() != w * 2 || out.height() != h * 2 || out.format() != QImage::Format_RGB32)
+        out = QImage(w * 2, h * 2, QImage::Format_RGB32);
 
     auto at = [&](int x, int y) -> QRgb
     {
@@ -956,8 +957,6 @@ static QImage sharpUpscale2x(const QImage& src)
             dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
         }
     }
-
-    return out;
 }
 
 ScreenPanelNative::ScreenPanelNative(QWidget* parent) : ScreenPanel(parent)
@@ -1034,7 +1033,10 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
         {
             painter.setTransform(screenTrans[i]);
             if (sharpUpscale)
-                painter.drawImage(screenrc, sharpUpscale2x(screen[screenKind[i]]));
+            {
+                sharpUpscale2x(screen[screenKind[i]], screenUpscaled[screenKind[i]]);
+                painter.drawImage(screenrc, screenUpscaled[screenKind[i]]);
+            }
             else
                 painter.drawImage(screenrc, screen[screenKind[i]]);
         }
