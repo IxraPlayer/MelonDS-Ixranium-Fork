@@ -1046,13 +1046,27 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
     // In-game keyboard mapping preview (bottom-right corner), independent of
     // the pause menu's own copy - toggled from View > Show keyboard preview.
-    liveKeyboardPreview = new KeyboardPreviewWidget(this);
+    //
+    // This is a genuine top-level window, not a child of the central
+    // widget: a plain QWidget overlapping the GL-rendered screen panel
+    // forces Qt to recomposite the WHOLE panel (the actual game frame,
+    // not just this little corner) on every single repaint of this
+    // widget - i.e. every key press/release during gameplay was causing
+    // a full-screen recomposite, which is what was actually behind the
+    // stutter/desync. A separate top-level surface is composited by the
+    // OS independently and never touches the game's own paint cycle.
+    // Qt::Tool + WindowDoesNotAcceptFocus keep it out of the taskbar/
+    // alt-tab and unable to steal keyboard focus, so it still reads as
+    // part of the main window rather than "a separate window" to the user.
+    liveKeyboardPreview = new KeyboardPreviewWidget(nullptr);
+    liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
+                                         Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     liveKeyboardPreview->setAttribute(Qt::WA_TranslucentBackground);
     liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
+    liveKeyboardPreview->setAttribute(Qt::WA_ShowWithoutActivating);
     liveKeyboardPreview->setFixedSize(400, 140);
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     positionLiveKeyboardPreview();
-    liveKeyboardPreview->raise();
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
     updateLiveKeyboardPreviewVisibility();
 }
@@ -3129,8 +3143,11 @@ void MainWindow::moveEvent(QMoveEvent* event)
 void MainWindow::positionLiveKeyboardPreview()
 {
     if (!liveKeyboardPreview) return;
-    liveKeyboardPreview->move(width() - liveKeyboardPreview->width() - 16,
-                               height() - liveKeyboardPreview->height() - 16);
+    // Top-level window now (see the constructor comment for why), so it
+    // needs actual screen coordinates rather than coordinates local to us.
+    QPoint corner = mapToGlobal(QPoint(width() - liveKeyboardPreview->width() - 16,
+                                        height() - liveKeyboardPreview->height() - 16));
+    liveKeyboardPreview->move(corner);
     liveKeyboardPreview->raise();
 }
 
