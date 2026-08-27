@@ -263,20 +263,44 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
     return mix(result, avg, pull * 0.35);
 }
 
+// Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
+// pipeline for one texcoord. Factored out of main() so it can be
+// evaluated at several sub-pixel offsets below instead of once.
+vec3 processPixel(vec3 uv, vec2 texSize)
+{
+    vec3 reconnected = diagonalReconnect(ScreenTex, uv, texSize);
+    vec3 edged = edgeUpscale(ScreenTex, uv, texSize, reconnected);
+    // CAS runs on top of the edge-blended result, not averaged
+    // against a separately-computed raw-source sharpen - that's
+    // what makes both stages actually visible together instead of
+    // each cancelling half of the other out.
+    vec3 sharpened = casSharpen(ScreenTex, uv, edged);
+    return cleanupPass(ScreenTex, uv, sharpened);
+}
+
 void main()
 {
     vec3 rgb;
     if (uSharpUpscale != 0)
     {
         vec2 texSize = vec2(textureSize(ScreenTex, 0).xy);
-        vec3 reconnected = diagonalReconnect(ScreenTex, fTexcoord, texSize);
-        vec3 edged = edgeUpscale(ScreenTex, fTexcoord, texSize, reconnected);
-        // CAS runs on top of the edge-blended result, not averaged
-        // against a separately-computed raw-source sharpen - that's
-        // what makes both stages actually visible together instead of
-        // each cancelling half of the other out.
-        vec3 sharpened = casSharpen(ScreenTex, fTexcoord, edged);
-        rgb = cleanupPass(ScreenTex, fTexcoord, sharpened);
+
+        // 2x2 supersampling on top of the algorithm above: each of the
+        // four stages is itself continuous/smoothstep-based (see their
+        // comments), so this isn't masking artifacts, it's averaging
+        // out the last bit of aliasing along the diagonal edges the
+        // algorithm targets in the first place - this is the actual
+        // quality ceiling of a shader-only approach, since the source
+        // is a fixed-resolution NDS framebuffer with no extra detail
+        // to recover. fwidth() gives the on-screen texel footprint in
+        // UV space, so the four taps stay exactly one output-pixel
+        // apart regardless of window/upscale size.
+        vec2 duv = fwidth(fTexcoord.xy) * 0.25;
+        vec3 s0 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x, -duv.y), fTexcoord.z), texSize);
+        vec3 s1 = processPixel(vec3(fTexcoord.xy + vec2( duv.x, -duv.y), fTexcoord.z), texSize);
+        vec3 s2 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x,  duv.y), fTexcoord.z), texSize);
+        vec3 s3 = processPixel(vec3(fTexcoord.xy + vec2( duv.x,  duv.y), fTexcoord.z), texSize);
+        rgb = (s0 + s1 + s2 + s3) * 0.25;
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
