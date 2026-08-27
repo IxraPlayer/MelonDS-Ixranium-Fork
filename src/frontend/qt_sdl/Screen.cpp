@@ -922,6 +922,37 @@ void ScreenPanel::calcSplashLayout()
 // into the corner - this turns staircase-y diagonal edges into a smoother
 // line without blurring flat-colour areas or losing any colour. Runs on the
 // tiny 256x192 DS framebuffer so the CPU cost is negligible.
+static inline void sharpUpscale2xRow(const QRgb* rowA, const QRgb* rowP, const QRgb* rowB,
+                                      QRgb* dst0, QRgb* dst1, int w)
+{
+    // Fast path: x in [1, w-2], no clamping needed, no lambda/indirection.
+    for (int x = 1; x < w - 1; x++)
+    {
+        QRgb P = rowP[x];
+        QRgb A = rowA[x];
+        QRgb B = rowB[x];
+        QRgb C = rowP[x - 1];
+        QRgb D = rowP[x + 1];
+
+        QRgb E0 = (C == A && C != D && A != B) ? A : P;
+        QRgb E1 = (A == D && A != C && D != B) ? D : P;
+        QRgb E2 = (C == B && C != D && B != A) ? C : P;
+        QRgb E3 = (D == B && D != C && B != A) ? B : P;
+
+        dst0[x * 2] = E0; dst0[x * 2 + 1] = E1;
+        dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
+    }
+}
+
+// "Sharp Upscale" (Beta): a small, self-written edge-directed 2x pixel-art
+// upscaler (EPX/Scale2x-style). For every source pixel P with neighbours
+// A(bove) B(elow) C(left) D(right), it looks at which neighbours agree with
+// each other diagonally and only then "extends" that neighbour's colour
+// into the corner - this turns staircase-y diagonal edges into a smoother
+// line without blurring flat-colour areas or losing any colour. Runs on the
+// tiny 256x192 DS framebuffer so the CPU cost is negligible, and is now
+// computed OUTSIDE the emu render lock (see paintEvent) so it can no longer
+// stall the emulation thread.
 static void sharpUpscale2x(const QImage& src, QImage& out)
 {
     const int w = src.width(), h = src.height();
@@ -937,10 +968,15 @@ static void sharpUpscale2x(const QImage& src, QImage& out)
 
     for (int y = 0; y < h; y++)
     {
+        const QRgb* rowP = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+        const QRgb* rowA = reinterpret_cast<const QRgb*>(src.constScanLine(std::clamp(y - 1, 0, h - 1)));
+        const QRgb* rowB = reinterpret_cast<const QRgb*>(src.constScanLine(std::clamp(y + 1, 0, h - 1)));
+
         QRgb* dst0 = reinterpret_cast<QRgb*>(out.scanLine(y * 2));
         QRgb* dst1 = reinterpret_cast<QRgb*>(out.scanLine(y * 2 + 1));
 
-        for (int x = 0; x < w; x++)
+        // left/right border columns still need clamped neighbour lookups
+        for (int x = 0; x < w; x += (w > 1 ? w - 1 : 1))
         {
             QRgb P = at(x, y);
             QRgb A = at(x, y - 1);
@@ -955,7 +991,13 @@ static void sharpUpscale2x(const QImage& src, QImage& out)
 
             dst0[x * 2] = E0; dst0[x * 2 + 1] = E1;
             dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
+
+            if (w <= 1) break;
         }
+
+        // fast, unclamped interior
+        if (w > 2)
+            sharpUpscale2xRow(rowA, rowP, rowB, dst0, dst1, w);
     }
 }
 
@@ -1015,8 +1057,16 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
     
     if (emuThread->emuIsActive())
     {
+        // IMPORTANT: renderLock only needs to be held for the framebuffer
+        // copy below (it synchronises against the emulation thread
+        // producing a new frame). It used to stay locked across the whole
+        // sharpUpscale2x pass for both screens too, which stalled the emu
+        // thread every single paintEvent and was the real cause of the
+        // stutter when "Sharp upscale" was enabled - the upscaler itself
+        // is cheap, it was the lock hold time that hurt. Now we copy,
+        // unlock immediately, and do all the (potentially per-frame)
+        // upscaling/drawing work outside the lock.
         emuInstance->renderLock.lock();
-
         bufferLock.lock();
         if (hasBuffers)
         {
@@ -1024,6 +1074,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
             memcpy(screen[1].scanLine(0), bottomBuffer, 256 * 192 * 4);
         }
         bufferLock.unlock();
+        emuInstance->renderLock.unlock();
 
         QRect screenrc(0, 0, 256, 192);
 
@@ -1059,7 +1110,6 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
                 painter.drawImage(screenrc, screen[screenKind[i]]);
             }
         }
-        emuInstance->renderLock.unlock();
     }
 
     osdUpdate();
