@@ -22,39 +22,16 @@ public:
     void addGame(const QString& path);
     QStringList gamePaths() const { return paths; }
 
-    // Decodes a plain .nds ROM's banner icon (32x32, NDS-native palette) into
-    // a QImage. Shared with Window.cpp so desktop shortcuts can use the same
-    // icon as the library tile. Returns a null QImage on failure (missing
-    // banner, archive entries, unreadable file, etc).
     static QImage loadRomIconImage(const QString& path);
-
-    // Reads the short game title out of the ROM's own icon/title banner
-    // (first line of the English title, same text shown on the real DS
-    // menu) instead of deriving a name from the filename. Returns an
-    // empty string if the ROM has no readable banner (archive entries,
-    // homebrew without a banner, etc) so the caller can fall back.
     static QString loadRomShortTitle(const QString& path);
-
     static void ApplyAccentTheme(const QString& qssThemeName);
 
-    // Per-game console type override (0 = DS, 1 = DSi, -1 = follow the
-    // global "Console type" setting). Set via each tile's right-click
-    // "Details..." menu so a game can be forced to boot as DS/DSi without
-    // having to open the main Emu Settings dialog and change (and later
-    // revert) the global default just for that one game.
     int consoleTypeOverride(const QString& path) const;
     void setConsoleTypeOverride(const QString& path, int type);
 
-    // Per-game control scheme override: the name of a scheme saved via
-    // InputConfigDialog/ControlSchemeStore, or an empty string to follow
-    // whatever the user's global keyboard mapping is. Also set via the
-    // tile's "Details..." menu.
     QString controlSchemeOverride(const QString& path) const;
     void setControlSchemeOverride(const QString& path, const QString& schemeName);
 
-    // Public so GameCardButton (a helper class defined alongside
-    // LibraryScreen in the .cpp) can read the currently selected accent
-    // hue without needing to be a friend class.
     static int AccentHueShift;
 
 signals:
@@ -67,11 +44,6 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
-
-    // Watches every tile (including the "+" add-tile) to implement
-    // press-and-drag reordering: press-drag past the OS drag threshold
-    // starts a QDrag carrying the source ROM path, and dropping it onto
-    // another tile reorders the library list around that drop target.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private slots:
@@ -87,24 +59,16 @@ private:
     QMap<QString, QToolButton*> tiles;
     int columns;
 
-    // Per-game console type overrides (ROM path -> 0/1), persisted via
-    // QSettings under a dedicated group so it survives restarts without
-    // touching the main config file's schema. Loaded once in the
-    // constructor and rewritten whenever an entry changes.
     QMap<QString, int> consoleOverrides;
     void loadConsoleOverrides();
     void saveConsoleOverrides();
 
-    // Per-game control scheme overrides (ROM path -> scheme name, absent =
-    // follow global), same persistence approach as consoleOverrides above.
     QMap<QString, QString> schemeOverrides;
     void loadSchemeOverrides();
     void saveSchemeOverrides();
 
     void showGameDetailsDialog(const QString& path, QWidget* anchor);
 
-    // Drag-reorder tracking: which tile the current press started on, and
-    // where, so mouseMove can tell a click apart from a drag.
     QToolButton* dragCandidate = nullptr;
     QPoint dragStartPos;
 
@@ -112,10 +76,6 @@ private:
     double bgPhase = 0.0;
     QTimer* bgAnimTimer;
 
-    // The corner vignette never changes shape/color, only the widget size
-    // it's stretched over - it was being recomputed (a full-window radial
-    // gradient fill) on every single 50ms background tick for no reason.
-    // Cached here and only rebuilt on resize/first paint.
     QPixmap vignetteCache;
     QSize vignetteCacheSize;
     void rebuildVignetteCache(const QRectF& r, const QPainterPath& path);
