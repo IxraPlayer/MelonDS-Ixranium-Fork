@@ -1092,6 +1092,23 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     positionLiveKeyboardPreview();
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
+#ifdef Q_OS_WIN
+    // Force native window creation now (winId()) and fix its exstyle/owner
+    // immediately, while it's still hidden - so the taskbar button this was
+    // getting (see setLiveKeyboardPreviewNativeVisible) never even flashes
+    // into existence for a frame the first time this becomes visible later.
+    HWND kbHwndInit = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
+    HWND mainHwndInit = reinterpret_cast<HWND>(this->winId());
+    if (kbHwndInit && mainHwndInit)
+    {
+        // Belt-and-suspenders on top of the Qt parent already passed to the
+        // constructor: make sure the *native* owner link is really set, in
+        // case Qt hasn't wired GWLP_HWNDPARENT itself for a Tool-flagged
+        // window in this configuration.
+        SetWindowLongPtr(kbHwndInit, GWLP_HWNDPARENT, (LONG_PTR)mainHwndInit);
+    }
+    setLiveKeyboardPreviewNativeVisible(false);
+#endif
     updateLiveKeyboardPreviewVisibility();
 }
 
@@ -3256,9 +3273,23 @@ void MainWindow::setLiveKeyboardPreviewNativeVisible(bool visible)
     // manages other exstyle bits on this HWND itself (WS_EX_LAYERED for
     // WA_TranslucentBackground, WS_EX_TOPMOST for WindowStaysOnTopHint) and
     // stomping those would break the translucency/stacking work done above.
+    // Also explicitly clear WS_EX_APPWINDOW - that's the bit that actually
+    // forces a taskbar button to exist regardless of TOOLWINDOW/owner, and
+    // Qt has been observed setting it on this HWND despite the Qt::Tool
+    // flag, which is why a second "melonDS" taskbar entry was showing up.
     LONG_PTR ex = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
-    LONG_PTR newEx = ex | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
-    if (newEx != ex) SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, newEx);
+    LONG_PTR newEx = (ex | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW;
+    if (newEx != ex)
+    {
+        SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, newEx);
+        // Critical: changing GWL_EXSTYLE after the HWND already exists has
+        // NO effect - visually or behaviorally - until you force Windows to
+        // re-evaluate it with SWP_FRAMECHANGED. Without this the OR'd-in
+        // bits above are silently ignored, which is exactly what was
+        // happening before (NOACTIVATE/TOOLWINDOW never actually applied).
+        SetWindowPos(kbHwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
 
     if (visible)
     {
