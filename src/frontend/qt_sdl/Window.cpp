@@ -3178,7 +3178,15 @@ void MainWindow::positionLiveKeyboardPreview()
     QPoint corner = anchor->mapToGlobal(QPoint(anchor->width() - liveKeyboardPreview->width() - 16,
                                                 anchor->height() - liveKeyboardPreview->height() - 16));
     liveKeyboardPreview->move(corner);
+#ifdef Q_OS_WIN
+    // Native no-activate raise (see setLiveKeyboardPreviewNativeVisible) -
+    // QWidget::raise() is what was pulling activation/z-order away from the
+    // game panel here, since it's called on every move/resize while the
+    // preview is already showing during gameplay.
+    if (liveKeyboardPreview->isVisible()) setLiveKeyboardPreviewNativeVisible(true);
+#else
     liveKeyboardPreview->raise();
+#endif
 }
 
 void MainWindow::updateLiveKeyboardPreviewVisibility()
@@ -3190,8 +3198,13 @@ void MainWindow::updateLiveKeyboardPreviewVisibility()
     bool inGame = !showingLibrary && emuInstance && emuInstance->emuIsActive() && !pauseMenuOverlay;
     bool visible = showKeyboardPreview && inGame;
     if (visible) positionLiveKeyboardPreview(); // re-anchor to the panel now that it's actually showing
-    liveKeyboardPreview->setVisible(visible);
 #ifdef Q_OS_WIN
+    // Create/keep the Qt-side bookkeeping in sync (isVisible(), etc.) but
+    // do the *actual* show/hide + activation-safe z-order change ourselves;
+    // see setLiveKeyboardPreviewNativeVisible for why QWidget::setVisible()
+    // alone wasn't enough to stop this from stealing focus from the panel.
+    liveKeyboardPreview->setVisible(visible);
+    setLiveKeyboardPreviewNativeVisible(visible);
     // WS_EX_TOOLWINDOW (set via Qt::Tool above) is *supposed* to be enough
     // to keep this off the taskbar on its own, but that's proven not to
     // be reliable in practice on some Windows 11 setups regardless of
@@ -3203,6 +3216,8 @@ void MainWindow::updateLiveKeyboardPreviewVisibility()
     // a fresh/recreated HWND (e.g. after a fullscreen toggle) needs its
     // own DeleteTab call.
     if (visible) removeLiveKeyboardPreviewFromTaskbar();
+#else
+    liveKeyboardPreview->setVisible(visible);
 #endif
 }
 
@@ -3229,6 +3244,38 @@ void MainWindow::removeLiveKeyboardPreviewFromTaskbar()
     }
 
     if (needUninit) CoUninitialize();
+}
+
+void MainWindow::setLiveKeyboardPreviewNativeVisible(bool visible)
+{
+    if (!liveKeyboardPreview) return;
+    HWND kbHwnd = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
+    if (!kbHwnd) return;
+
+    // OR the bit in rather than overwrite the whole exstyle: Qt already
+    // manages other exstyle bits on this HWND itself (WS_EX_LAYERED for
+    // WA_TranslucentBackground, WS_EX_TOPMOST for WindowStaysOnTopHint) and
+    // stomping those would break the translucency/stacking work done above.
+    LONG_PTR ex = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
+    LONG_PTR newEx = ex | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+    if (newEx != ex) SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, newEx);
+
+    if (visible)
+    {
+        // The actual guarantee against stealing focus/activation: doing the
+        // z-order change through Win32 directly with SWP_NOACTIVATE, rather
+        // than through Qt's raise()/show(), which route through internal
+        // paths that on some Qt versions still end up calling
+        // SetForegroundWindow/BringWindowToTop for the *first* show of a
+        // fresh HWND regardless of WA_ShowWithoutActivating.
+        SetWindowPos(kbHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        ShowWindow(kbHwnd, SW_SHOWNA);
+    }
+    else
+    {
+        ShowWindow(kbHwnd, SW_HIDE);
+    }
 }
 #endif
 

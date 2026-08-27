@@ -116,6 +116,16 @@ protected:
     // liveKeyboardPreview's HWND should never get its own taskbar button,
     // instead of relying on Explorer inferring that from window styles.
     void removeLiveKeyboardPreviewFromTaskbar();
+    // Forces WS_EX_NOACTIVATE onto the live HWND and does the show/hide +
+    // z-order change ourselves via SetWindowPos(SWP_NOACTIVATE)/ShowWindow
+    // instead of QWidget::setVisible()+raise(). Qt's Tool+WindowStaysOnTopHint
+    // +WindowDoesNotAcceptFocus combo is *supposed* to map to WS_EX_NOACTIVATE
+    // already, but on some Windows/Qt combos that bit gets dropped (or
+    // re-lost on later internal Qt calls), which is what lets this window
+    // steal activation/z-order from the game panel - reading to the user as
+    // the preview "coming to front" and the game "going to the back" of a tab
+    // group, needing an extra click on the game to refocus it.
+    void setLiveKeyboardPreviewNativeVisible(bool visible);
 #endif
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
