@@ -3096,9 +3096,28 @@ void MainWindow::onChangeSharpUpscale(bool checked)
         // which is effectively supersampled antialiasing) and enable the
         // higher-quality polygon rasteriser, but don't downgrade a value
         // the user already set higher manually.
-        if (globalCfg.GetInt("3D.GL.ScaleFactor") < 4)
-            globalCfg.SetInt("3D.GL.ScaleFactor", 4);
+        //
+        // Raised from 4x to 6x: 4x was chosen when this toggle only had
+        // to cover the 2D shader path, but the 3D supersample is the
+        // main lever left for genuine quality gains (the 2D shader is
+        // already tuned close to its ceiling - see main_shaders.h). 6x
+        // is still a single offscreen-buffer resize, not a compounding
+        // cost, so it's a one-time VRAM/fillrate increase rather than a
+        // per-frame one; on integrated GPUs this is the point where it
+        // starts to matter, which is why we still never downgrade a
+        // user's own higher choice.
+        if (globalCfg.GetInt("3D.GL.ScaleFactor") < 6)
+            globalCfg.SetInt("3D.GL.ScaleFactor", 6);
         globalCfg.SetBool("3D.GL.BetterPolygons", true);
+
+        // Perspective-correct hi-res vertex coordinates: defaults on,
+        // but a user may have turned it off from the Video Settings
+        // dialog before finding this toggle. It has no meaningful perf
+        // cost (it's a coordinate precision change, not extra
+        // rasterisation work) and directly reduces polygon warping/
+        // texture swimming, so "Optimized Graphics" should guarantee it
+        // the same way it guarantees BetterPolygons above.
+        globalCfg.SetBool("3D.GL.HiresCoordinates", true);
     }
 
     bool new_gl = globalCfg.GetBool("Screen.UseGL")
