@@ -3060,22 +3060,32 @@ void MainWindow::onChangeSharpUpscale(bool checked)
     windowCfg.SetBool("SharpUpscale", checked);
     panel->setSharpUpscale(checked);
 
-    // Sharp upscale does its own edge-directed filtering in the shader, so
-    // plain bilinear "Screen filtering" is redundant on top of it (and just
-    // adds extra blur). Keep the related video settings consistent with
-    // whichever mode was just picked instead of leaving them in a
-    // conflicting state the user has to notice and fix by hand.
-    if (checked)
+    // Sharp upscale is a GL-shader-only effect (kScreenFS in main_shaders.h).
+    // ScreenPanelNative (used when the screen display isn't running on
+    // OpenGL) has no shader stage at all, so with GL display off this
+    // setting would silently do nothing. Force GL display on so the toggle
+    // actually works, and do it live via the same glchange path the Video
+    // Settings dialog uses instead of asking for a manual restart.
+    bool glWasForced = false;
+    if (checked && !globalCfg.GetBool("Screen.UseGL")
+               && globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
+    {
+        globalCfg.SetBool("Screen.UseGL", true);
+        glWasForced = true;
+    }
+
+    // Plain bilinear "Screen filtering" is redundant on top of sharp
+    // upscale's own edge-directed filtering (and just adds extra blur), so
+    // keep it in sync instead of leaving a conflicting state behind.
+    if (checked && actScreenFiltering->isChecked())
     {
         actScreenFiltering->setChecked(false);
         windowCfg.SetBool("ScreenFilter", false);
         panel->setFilter(false);
     }
 
-    QMessageBox::information(
-        this,
-        tr("Restart required"),
-        tr("Video settings have been updated. Please restart melonDS for the changes to take full effect."));
+    if (glWasForced)
+        onUpdateVideoSettings(true);
 }
 
 void MainWindow::onChangeShowOSD(bool checked)
