@@ -124,7 +124,7 @@ vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize)
                                         abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
     float edgeMag = min(d1, d2);
-    float blendStrength = smoothstep(0.03, 0.12, edgeMag) * cornerDist * 0.6;
+    float blendStrength = smoothstep(0.015, 0.07, edgeMag) * cornerDist;
 
     vec3 sideAvg = mix(side1, side2, 0.5);
     vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
@@ -137,11 +137,14 @@ vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize)
 // little to no sharpening, only genuine mid-contrast detail does), and
 // folds that weight back in through a normalised blend - this is what
 // keeps CAS from ringing the way a fixed-amount unsharp mask can.
-vec3 casSharpen(sampler2DArray tex, vec3 uv)
+// Takes the edge-blended colour as its centre sample (rather than the
+// raw texel) so the sharpen is applied on top of stage 1's result
+// instead of being computed independently and then diluted against it.
+vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
 {
     vec3 a = textureOffset(tex, uv, ivec2( 0, -1)).rgb; // N
     vec3 b = textureOffset(tex, uv, ivec2(-1,  0)).rgb; // W
-    vec3 e = textureOffset(tex, uv, ivec2( 0,  0)).rgb; // centre
+    vec3 e = center;
     vec3 f = textureOffset(tex, uv, ivec2( 1,  0)).rgb; // E
     vec3 g = textureOffset(tex, uv, ivec2( 0,  1)).rgb; // S
 
@@ -152,8 +155,9 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv)
     vec3 ampl = clamp(min(mn, 2.0 - mx) * rcpMax, 0.0, 1.0);
     ampl = sqrt(ampl);
 
-    // sharpness in [0,1]; 0.5 is a moderate, safe default.
-    const float sharpness = 0.5;
+    // sharpness in [0,1] - raised from the initial 0.5 default, which
+    // read as barely-there against a full pixel-art source.
+    const float sharpness = 0.85;
     float peak = -1.0 / mix(8.0, 5.0, sharpness);
     vec3 cw = ampl * peak;
 
@@ -169,12 +173,11 @@ void main()
     {
         vec2 texSize = vec2(textureSize(ScreenTex, 0).xy);
         vec3 edged = edgeUpscale(ScreenTex, fTexcoord, texSize);
-        vec3 sharpened = casSharpen(ScreenTex, fTexcoord);
-        // Layer both stages together rather than one overwriting the
-        // other: the edge-directed blend supplies the diagonal
-        // smoothing, CAS supplies the local-contrast pop, and averaging
-        // them keeps either stage from being fully undone by the other.
-        rgb = mix(edged, sharpened, 0.5);
+        // CAS runs on top of the edge-blended result, not averaged
+        // against a separately-computed raw-source sharpen - that's
+        // what makes both stages actually visible together instead of
+        // each cancelling half of the other out.
+        rgb = casSharpen(ScreenTex, fTexcoord, edged);
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
