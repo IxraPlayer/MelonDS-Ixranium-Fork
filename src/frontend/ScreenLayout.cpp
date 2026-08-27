@@ -142,26 +142,33 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
         M23_Identity(TopScreenMtx);
         M23_Identity(BotScreenMtx);
 
-        float mainScale = std::min(screenWidth / 256.f, screenHeight / 192.f);
-        if (integerScale) mainScale = floorf(mainScale);
-
-        // small screen: ~22% of the window width, docked flush to the right
-        // edge, near the top
-        float margin = screenGap > 0 ? (float)screenGap : 16.f;
+        // small screen: ~22% of the window width, docked flush to the
+        // top-right corner (top edge and right edge), and flush against
+        // the main screen's right edge too - so it tiles into the
+        // corner with no black gap and no overlap on any of its three
+        // touching sides.
         float smallW = screenWidth * 0.22f;
         float smallScale = smallW / 256.f;
         if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
+        smallW = smallScale * 256.f; // re-derive from the (possibly floored) scale
         float smallH = 192.f * smallScale;
 
-        // shift the top screen left so it never sits under the small screen
-        float topShiftX = smallW * 0.55f;
+        // Fit the main screen into the width that's actually left over
+        // once the small screen's column is reserved, not the full
+        // window width - that's what makes their shared edge flush
+        // instead of the two either overlapping or leaving a gap
+        // (the previous version used a fixed 0.55x fudge factor here
+        // that only happened to line up for one window aspect ratio).
+        float mainScale = std::min((screenWidth - smallW) / 256.f, screenHeight / 192.f);
+        if (integerScale) mainScale = floorf(mainScale);
 
         M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(TopScreenMtx, mainScale);
-        M23_Translate(TopScreenMtx, (screenWidth/2.f) - topShiftX, screenHeight/2.f);
+        // Flush against the left wall, vertically centred.
+        M23_Translate(TopScreenMtx, (mainScale*256.f)/2.f, screenHeight/2.f);
 
         float fbotTransX = screenWidth - smallW/2.f; // flush against the right edge
-        float fbotTransY = margin + smallH/2.f;
+        float fbotTransY = smallH/2.f; // flush against the top edge
 
         M23_Translate(BotScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(BotScreenMtx, smallScale);

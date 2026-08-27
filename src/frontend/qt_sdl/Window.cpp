@@ -1000,6 +1000,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
         actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
         actSharpUpscale->setChecked(windowCfg.GetBool("SharpUpscale"));
+        // setChecked() above doesn't emit triggered(), so if Optimized
+        // Graphics was already on from a previous session, the 3D-side
+        // forcing (GL renderer/ScaleFactor/etc, see
+        // applyOptimizedGraphics3D) never used to run - only the 2D
+        // shader (read directly from config in Screen.cpp) took effect,
+        // leaving 3D content native-res/jagged until the checkbox was
+        // manually re-toggled. Apply it explicitly here too.
+        if (windowCfg.GetBool("SharpUpscale"))
+            applyOptimizedGraphics3D();
         actShowOSD->setChecked(showOSD);
         actShowKeyboardPreview->setChecked(showKeyboardPreview);
 
@@ -3055,11 +3064,8 @@ void MainWindow::onChangeScreenFiltering(bool checked)
     panel->setFilter(checked);
 }
 
-void MainWindow::onChangeSharpUpscale(bool checked)
+void MainWindow::applyOptimizedGraphics3D()
 {
-    windowCfg.SetBool("SharpUpscale", checked);
-    panel->setSharpUpscale(checked);
-
     // "Optimized Graphics" is a GL-shader-only effect (kScreenFS in
     // main_shaders.h) for the 2D screen blit, plus (below) the 3D
     // renderer's own internal-resolution supersampling. ScreenPanelNative
@@ -3070,59 +3076,53 @@ void MainWindow::onChangeSharpUpscale(bool checked)
     // dialog uses instead of asking for a manual restart.
     bool old_gl = globalCfg.GetBool("Screen.UseGL")
                 || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
-    bool glchangeNeeded = false;
 
-    if (checked)
+    if (!globalCfg.GetBool("Screen.UseGL"))
     {
-        if (!globalCfg.GetBool("Screen.UseGL"))
-        {
-            globalCfg.SetBool("Screen.UseGL", true);
-        }
-
-        // The software 3D renderer draws at native (256x192) resolution
-        // with no antialiasing, which is why every 3D model looks blocky
-        // no matter how much the 2D screen shader sharpens the output -
-        // there's simply no extra geometry detail there to recover.
-        // Switch to the OpenGL 3D renderer so models get supersampled at
-        // a higher internal resolution instead.
-        if (globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
-        {
-            globalCfg.SetInt("3D.Renderer", renderer3D_OpenGL);
-        }
-
-        // Bump the 3D internal render resolution (this is what actually
-        // smooths out polygon edges/textures - "GL_ScaleFactor" renders
-        // the 3D scene at NxN the native resolution and downsamples it,
-        // which is effectively supersampled antialiasing) and enable the
-        // higher-quality polygon rasteriser, but don't downgrade a value
-        // the user already set higher manually.
-        //
-        // Raised from 4x to 6x: 4x was chosen when this toggle only had
-        // to cover the 2D shader path, but the 3D supersample is the
-        // main lever left for genuine quality gains (the 2D shader is
-        // already tuned close to its ceiling - see main_shaders.h). 6x
-        // is still a single offscreen-buffer resize, not a compounding
-        // cost, so it's a one-time VRAM/fillrate increase rather than a
-        // per-frame one; on integrated GPUs this is the point where it
-        // starts to matter, which is why we still never downgrade a
-        // user's own higher choice.
-        if (globalCfg.GetInt("3D.GL.ScaleFactor") < 6)
-            globalCfg.SetInt("3D.GL.ScaleFactor", 6);
-        globalCfg.SetBool("3D.GL.BetterPolygons", true);
-
-        // Perspective-correct hi-res vertex coordinates: defaults on,
-        // but a user may have turned it off from the Video Settings
-        // dialog before finding this toggle. It has no meaningful perf
-        // cost (it's a coordinate precision change, not extra
-        // rasterisation work) and directly reduces polygon warping/
-        // texture swimming, so "Optimized Graphics" should guarantee it
-        // the same way it guarantees BetterPolygons above.
-        globalCfg.SetBool("3D.GL.HiresCoordinates", true);
+        globalCfg.SetBool("Screen.UseGL", true);
     }
+
+    // The software 3D renderer draws at native (256x192) resolution
+    // with no antialiasing, which is why every 3D model looks blocky
+    // no matter how much the 2D screen shader sharpens the output -
+    // there's simply no extra geometry detail there to recover.
+    // Switch to the OpenGL 3D renderer so models get supersampled at
+    // a higher internal resolution instead.
+    if (globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
+    {
+        globalCfg.SetInt("3D.Renderer", renderer3D_OpenGL);
+    }
+
+    // Bump the 3D internal render resolution (this is what actually
+    // smooths out polygon edges/textures - "GL_ScaleFactor" renders
+    // the 3D scene at NxN the native resolution and downsamples it,
+    // which is effectively supersampled antialiasing) and enable the
+    // higher-quality polygon rasteriser, but don't downgrade a value
+    // the user already set higher manually.
+    if (globalCfg.GetInt("3D.GL.ScaleFactor") < 6)
+        globalCfg.SetInt("3D.GL.ScaleFactor", 6);
+    globalCfg.SetBool("3D.GL.BetterPolygons", true);
+
+    // Perspective-correct hi-res vertex coordinates: defaults on, but a
+    // user may have turned it off from the Video Settings dialog before
+    // finding this toggle. It has no meaningful perf cost (it's a
+    // coordinate precision change, not extra rasterisation work) and
+    // directly reduces polygon warping/texture swimming, so "Optimized
+    // Graphics" should guarantee it the same way it guarantees
+    // BetterPolygons above.
+    globalCfg.SetBool("3D.GL.HiresCoordinates", true);
 
     bool new_gl = globalCfg.GetBool("Screen.UseGL")
                 || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
-    glchangeNeeded = (old_gl != new_gl);
+    bool glchangeNeeded = (old_gl != new_gl);
+
+    onUpdateVideoSettings(glchangeNeeded);
+}
+
+void MainWindow::onChangeSharpUpscale(bool checked)
+{
+    windowCfg.SetBool("SharpUpscale", checked);
+    panel->setSharpUpscale(checked);
 
     // Plain bilinear "Screen filtering" is redundant on top of the
     // edge-directed filtering here (and just adds extra blur), so keep it
@@ -3135,7 +3135,7 @@ void MainWindow::onChangeSharpUpscale(bool checked)
     }
 
     if (checked)
-        onUpdateVideoSettings(glchangeNeeded);
+        applyOptimizedGraphics3D();
 }
 
 void MainWindow::onChangeShowOSD(bool checked)

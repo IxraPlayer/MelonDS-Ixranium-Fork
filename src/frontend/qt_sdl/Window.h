@@ -209,6 +209,12 @@ private slots:
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
     void onChangeSharpUpscale(bool checked);
+    // Applies the 3D-side consequences of Optimized Graphics (force GL
+    // renderer, bump ScaleFactor/BetterPolygons/HiresCoordinates).
+    // Shared between the checkbox handler and startup init, since a
+    // checkbox restored to checked via setChecked() at load time does
+    // not emit triggered() and so never used to run this.
+    void applyOptimizedGraphics3D();
     void onChangeShowOSD(bool checked);
     void onChangeShowKeyboardPreview(bool checked);
     void onChangeLimitFramerate(bool checked);
