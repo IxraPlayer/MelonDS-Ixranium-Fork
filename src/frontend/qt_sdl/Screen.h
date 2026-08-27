@@ -120,6 +120,7 @@ protected:
     int screenLayout;
     bool screenSwap;
     int screenSizing;
+    bool screenFocused;
     bool integerScaling;
     int screenAspectTop, screenAspectBot;
 

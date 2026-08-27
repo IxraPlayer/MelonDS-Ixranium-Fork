@@ -72,7 +72,8 @@ public:
                int screenGap,
                bool integerScale,
                bool swapScreens,
-               float topAspect, float botAspect);
+               float topAspect, float botAspect,
+               bool focusedScreen = false);
 
     // get a 2x3 transform matrix for each screen and whether it's a top or bottom screen
     // note: the transform assumes an origin point at the top left of the display,

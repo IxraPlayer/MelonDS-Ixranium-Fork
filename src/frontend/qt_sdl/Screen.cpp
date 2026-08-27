@@ -134,6 +134,7 @@ void ScreenPanel::loadConfig()
     screenLayout = cfg.GetInt("ScreenLayout");
     screenSwap = cfg.GetBool("ScreenSwap");
     screenSizing = cfg.GetInt("ScreenSizing");
+    screenFocused = cfg.GetBool("ScreenFocused");
     integerScaling = cfg.GetBool("IntegerScaling");
     screenAspectTop = cfg.GetInt("ScreenAspectTop");
     screenAspectBot = cfg.GetInt("ScreenAspectBot");
@@ -184,7 +185,8 @@ void ScreenPanel::setupScreenLayout()
                 integerScaling != 0,
                 screenSwap != 0,
                 aspectTop,
-                aspectBot);
+                aspectBot,
+                screenFocused != 0);
 
     numScreens = layout.GetScreenTransforms(screenMatrix[0], screenKind);
 

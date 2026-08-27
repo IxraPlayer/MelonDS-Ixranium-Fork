@@ -127,8 +127,51 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
     int screenGap,
     bool integerScale,
     bool swapScreens,
-    float topAspect, float botAspect)
+    float topAspect, float botAspect,
+    bool focusedScreen)
 {
+    // "Focused Screen": the top (game) screen fills almost the whole window,
+    // and the bottom screen sits small in the top-right corner.
+    // This is handled as an independent, simple layout so it doesn't
+    // interfere with the existing Hybrid/Natural/etc. math below.
+    if (focusedScreen)
+    {
+        HybEnable = false;
+        TopEnable = BotEnable = true;
+
+        M23_Identity(TopScreenMtx);
+        M23_Identity(BotScreenMtx);
+
+        float mainScale = std::min(screenWidth / 256.f, screenHeight / 192.f);
+        if (integerScale) mainScale = floorf(mainScale);
+
+        M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
+        M23_Scale(TopScreenMtx, mainScale);
+        M23_Translate(TopScreenMtx, screenWidth/2.f, screenHeight/2.f);
+
+        // small screen: ~28% of the window width, anchored to the top-right,
+        // with a small margin
+        float margin = screenGap > 0 ? (float)screenGap : 16.f;
+        float smallW = screenWidth * 0.28f;
+        float smallScale = smallW / 256.f;
+        if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
+        float smallH = 192.f * smallScale;
+
+        float fbotTransX = screenWidth - margin - smallW/2.f;
+        float fbotTransY = margin + smallH/2.f;
+
+        M23_Translate(BotScreenMtx, -256/2.f, -192/2.f);
+        M23_Scale(BotScreenMtx, smallScale);
+        M23_Translate(BotScreenMtx, fbotTransX, fbotTransY);
+
+        M23_Identity(TouchMtx);
+        M23_Translate(TouchMtx, -fbotTransX, -fbotTransY);
+        M23_Scale(TouchMtx, 1.f / smallScale);
+        M23_Translate(TouchMtx, 256/2.f, 192/2.f);
+
+        return;
+    }
+
     HybEnable = screenLayout == 3;
     if (HybEnable)
     {

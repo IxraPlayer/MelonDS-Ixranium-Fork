@@ -677,6 +677,10 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
                 actScreenSwap = submenu->addAction(tr("Swap screens"));
                 actScreenSwap->setCheckable(true);
                 connect(actScreenSwap, &QAction::triggered, this, &MainWindow::onChangeScreenSwap);
+
+                actScreenFocused = submenu->addAction(tr("Focused screen"));
+                actScreenFocused->setCheckable(true);
+                connect(actScreenFocused, &QAction::triggered, this, &MainWindow::onChangeScreenFocused);
             }
             {
                 QMenu * submenu = menu->addMenu(tr("Screen sizing"));
@@ -978,6 +982,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         actIntegerScaling->setChecked(windowCfg.GetBool("IntegerScaling"));
 
         actScreenSwap->setChecked(windowCfg.GetBool("ScreenSwap"));
+        actScreenFocused->setChecked(windowCfg.GetBool("ScreenFocused"));
 
         int aspectTop = windowCfg.GetInt("ScreenAspectTop");
         int aspectBot = windowCfg.GetInt("ScreenAspectBot");
@@ -2989,6 +2994,13 @@ void MainWindow::onChangeScreenSwap(bool checked)
         actScreenSizing[sizing]->setChecked(true);
     }
     windowCfg.SetInt("ScreenSizing", sizing);
+
+    emit screenLayoutChange();
+}
+
+void MainWindow::onChangeScreenFocused(bool checked)
+{
+    windowCfg.SetBool("ScreenFocused", checked);
 
     emit screenLayoutChange();
 }

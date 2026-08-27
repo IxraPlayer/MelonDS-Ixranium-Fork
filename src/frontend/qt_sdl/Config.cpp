@@ -212,6 +212,7 @@ LegacyEntry LegacyFile[] =
     {"ScreenLayout",   0, "Window0.ScreenLayout", true},
     {"ScreenSwap",     1, "Window0.ScreenSwap", true},
     {"ScreenSizing",   0, "Window0.ScreenSizing", true},
+    {"ScreenFocused",  0, "Window0.ScreenFocused", true},
     {"IntegerScaling", 1, "Window0.IntegerScaling", true},
     {"ScreenAspectTop",0, "Window0.ScreenAspectTop", true},
     {"ScreenAspectBot",0, "Window0.ScreenAspectBot", true},
