@@ -1049,25 +1049,24 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // In-game keyboard mapping preview (bottom-right corner), independent of
     // the pause menu's own copy - toggled from View > Show keyboard preview.
     //
-    // A genuine top-level window rather than a child of the central widget:
-    // a plain QWidget overlapping the GL-rendered screen panel forces Qt to
-    // recomposite the WHOLE panel (the actual game frame) on every single
-    // repaint of this widget - every key press/release during gameplay was
-    // causing a full-screen recomposite, which is what was actually behind
-    // the stutter/desync. A separate top-level surface is composited by the
-    // OS independently and never touches the game's own paint cycle.
+    // A genuine *native child* widget, not a top-level Tool window: a
+    // top-level Tool window turned out to still be OS-classifiable as a
+    // separate taskbar entry on some Windows 11 setups no matter how many
+    // WS_EX_TOOLWINDOW/owner/frame-changed hacks were thrown at it after
+    // creation - Explorer's taskbar grouping only ever gives a 100%
+    // guarantee for something that structurally isn't a top-level window
+    // at all. A WS_CHILD window can never get a taskbar button, full stop.
     //
-    // Passing `this` as the parent (rather than nullptr) still keeps it a
-    // real top-level window for that reason, but also makes MainWindow its
-    // OS-level *owner*: it stacks above MainWindow specifically (follows
-    // it, minimizes/restores with it), instead of floating as a fully
-    // independent, ownerless window that can end up behind the game and
-    // reads as "a separate app window" to the user. Qt::Tool +
-    // WindowDoesNotAcceptFocus additionally keep it out of the taskbar/
-    // alt-tab and unable to steal keyboard focus.
+    // This still avoids the original full-panel-recomposite problem that
+    // a *plain* (non-native) child widget caused: forcing WA_NativeWindow
+    // gives this its own real HWND, exactly like ScreenPanelGL/
+    // ScreenPanelNative already do for the game view itself (see their
+    // comments below) - so it still paints through its own independent
+    // surface and repainting it doesn't force the game panel to
+    // recomposite, same benefit as before, just without ever being a
+    // separate top-level/taskbar-eligible window in the first place.
     liveKeyboardPreview = new KeyboardPreviewWidget(this);
-    liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
-                                         Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
+    liveKeyboardPreview->setAttribute(Qt::WA_NativeWindow);
     // Belt-and-suspenders against a visible rectangular "window" edge:
     // WA_TranslucentBackground alone can still leave Qt's own backing
     // store pre-filling this widget's rect with an opaque color on some
@@ -1082,36 +1081,12 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     pal.setColor(QPalette::Window, Qt::transparent);
     liveKeyboardPreview->setPalette(pal);
     liveKeyboardPreview->setAttribute(Qt::WA_TransparentForMouseEvents);
-    liveKeyboardPreview->setAttribute(Qt::WA_ShowWithoutActivating);
+    liveKeyboardPreview->setFocusPolicy(Qt::NoFocus); // child-window equivalent of the old WindowDoesNotAcceptFocus
     liveKeyboardPreview->setFixedSize(400, 140);
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     positionLiveKeyboardPreview();
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
     updateLiveKeyboardPreviewVisibility();
-
-#if defined(Q_OS_LINUX)
-    // Same idea on X11: Qt::Tool usually keeps this out of the taskbar,
-    // but some window managers only reliably honor it via the explicit
-    // EWMH _NET_WM_STATE_SKIP_TASKBAR/SKIP_PAGER hints. Set those by hand
-    // once the native window exists. (Wayland has no equivalent knob;
-    // there Qt::Tool is all we can do, and every compositor we've tested
-    // already respects it.)
-    if (QGuiApplication::platformName() == "xcb")
-    {
-        liveKeyboardPreview->winId(); // force native X11 window creation now
-        if (auto* x11App = qGuiApp->nativeInterface<QNativeInterface::QX11Application>())
-        {
-            Display* dpy = x11App->display();
-            Window w = (Window)liveKeyboardPreview->winId();
-            Atom netWmState = XInternAtom(dpy, "_NET_WM_STATE", False);
-            Atom skipTaskbar = XInternAtom(dpy, "_NET_WM_STATE_SKIP_TASKBAR", False);
-            Atom skipPager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
-            Atom states[2] = { skipTaskbar, skipPager };
-            XChangeProperty(dpy, w, netWmState, XA_ATOM, 32, PropModeAppend,
-                             (unsigned char*)states, 2);
-        }
-    }
-#endif
 }
 
 MainWindow::~MainWindow()
@@ -3190,42 +3165,20 @@ void MainWindow::positionLiveKeyboardPreview()
     // Anchor to the actual game screen widget, not MainWindow's own outer
     // rect - MainWindow's height includes the custom title bar/menu bar
     // chrome above the game area, which used to throw this off (it read
-    // as sitting too low, relative to the visible screen, once this
-    // switched to a real top-level window computing against the wrong
-    // reference size).
+    // as sitting too low, relative to the visible screen).
+    //
+    // liveKeyboardPreview is now a plain native *child* widget of
+    // MainWindow (see createLiveKeyboardPreview's comment) rather than a
+    // top-level window, so move() takes a position relative to
+    // MainWindow's own client area, not a global screen position -
+    // compute the corner in global coordinates against the anchor as
+    // before, then map it back into MainWindow-local space.
     QWidget* anchor = (panel && panel->isVisible()) ? (QWidget*)panel : (QWidget*)this;
-    QPoint corner = anchor->mapToGlobal(QPoint(anchor->width() - liveKeyboardPreview->width() - 16,
-                                                anchor->height() - liveKeyboardPreview->height() - 16));
-    liveKeyboardPreview->move(corner);
+    QPoint globalCorner = anchor->mapToGlobal(QPoint(anchor->width() - liveKeyboardPreview->width() - 16,
+                                                      anchor->height() - liveKeyboardPreview->height() - 16));
+    liveKeyboardPreview->move(mapFromGlobal(globalCorner));
     liveKeyboardPreview->raise();
 }
-
-#ifdef Q_OS_WIN
-void MainWindow::applyLiveKeyboardPreviewToolStyle()
-{
-    if (!liveKeyboardPreview) return;
-    liveKeyboardPreview->winId(); // force native HWND creation now
-    HWND kbHwnd = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
-    LONG_PTR exStyle = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
-    exStyle |= WS_EX_TOOLWINDOW;
-    exStyle &= ~WS_EX_APPWINDOW;
-    SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, exStyle);
-    // Belt-and-suspenders: force the real Win32 owner to MainWindow's HWND
-    // by hand. An unowned WS_EX_TOOLWINDOW window can still earn its own
-    // taskbar button on Windows 11, and Qt's parent->owner wiring doesn't
-    // always survive things like a fullscreen HWND swap.
-    winId(); // make sure MainWindow itself has a native HWND to point to
-    HWND mainHwnd = reinterpret_cast<HWND>(winId());
-    SetWindowLongPtr(kbHwnd, GWLP_HWNDPARENT, (LONG_PTR)mainHwnd);
-    // SetWindowLongPtr alone does NOT take effect: per MSDN, a GWL_EXSTYLE
-    // (or GWLP_HWNDPARENT) change needs an explicit SetWindowPos with
-    // SWP_FRAMECHANGED afterwards, or Explorer keeps using the taskbar
-    // button/grouping it decided on when the HWND was first created -
-    // which is exactly the "still shows as its own entry" symptom.
-    SetWindowPos(kbHwnd, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
-#endif
 
 void MainWindow::updateLiveKeyboardPreviewVisibility()
 {
@@ -3237,9 +3190,6 @@ void MainWindow::updateLiveKeyboardPreviewVisibility()
     bool visible = showKeyboardPreview && inGame;
     if (visible) positionLiveKeyboardPreview(); // re-anchor to the panel now that it's actually showing
     liveKeyboardPreview->setVisible(visible);
-#ifdef Q_OS_WIN
-    if (visible) applyLiveKeyboardPreviewToolStyle();
-#endif
 }
 
 void MainWindow::refreshKeyboardPreviews()
