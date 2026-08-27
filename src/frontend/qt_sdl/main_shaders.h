@@ -71,16 +71,15 @@ float luma(vec3 c)
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
+vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
 {
-    vec2 texSize = vec2(textureSize(tex, 0).xy);
-    vec2 texel = 1.0 / texSize;
-
-    // position within the source texel, in [0,1)^2
     vec2 pixelPos = uv.xy * texSize;
     vec2 subpix = fract(pixelPos);
 
-    // 3x3 neighbourhood around the centre texel
+    // 3x3 neighbourhood + the 4 "further" pixels (2 steps in each axis)
+    // used purely to strengthen edge-direction confidence, the way xBR's
+    // larger comparison window reduces false-positive diagonals compared
+    // to a plain 3x3 rule.
     vec3 c  = textureOffset(tex, uv, ivec2( 0,  0)).rgb;
     vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
     vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
@@ -90,59 +89,74 @@ vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
     vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
     vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
     vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
+    vec3 nn = textureOffset(tex, uv, ivec2( 0, -2)).rgb;
+    vec3 ss = textureOffset(tex, uv, ivec2( 0,  2)).rgb;
+    vec3 ww = textureOffset(tex, uv, ivec2(-2,  0)).rgb;
+    vec3 ee = textureOffset(tex, uv, ivec2( 2,  0)).rgb;
 
     float lc = luma(c), ln = luma(n), ls = luma(s), lw = luma(w), le = luma(e);
     float lnw = luma(nw), lne = luma(ne), lsw = luma(sw), lse = luma(se);
+    float lnn = luma(nn), lss = luma(ss), lww = luma(ww), lee = luma(ee);
 
-    // which quadrant of the source texel is this fragment in
     bvec2 q = greaterThanEqual(subpix, vec2(0.5));
 
-    // pick the relevant corner neighbours + straight neighbours for
-    // that quadrant, and estimate a diagonal edge strength (xBR-style
-    // "edge detection rule": compare the two possible diagonal
-    // gradients through the corner)
-    vec3 diagA, diagB; // the two pixels an edge would run between
-    vec3 side1, side2; // straight neighbours flanking the corner
+    vec3 diagB; vec3 side1, side2;
     float d1, d2;
+    float farConfirm; // extra confidence term from the "further" pixels
 
-    if (!q.x && !q.y) { diagA = c; diagB = nw; side1 = n; side2 = w;
+    if (!q.x && !q.y) { diagB = nw; side1 = n; side2 = w;
                          d1 = abs(lnw - lc) + abs(ln - lw);
-                         d2 = abs(ln - lnw) + abs(lw - lc); }
-    else if (q.x && !q.y) { diagA = c; diagB = ne; side1 = n; side2 = e;
+                         d2 = abs(ln - lnw) + abs(lw - lc);
+                         farConfirm = abs(lnn - ls) + abs(lww - le); }
+    else if (q.x && !q.y) { diagB = ne; side1 = n; side2 = e;
                          d1 = abs(lne - lc) + abs(ln - le);
-                         d2 = abs(ln - lne) + abs(le - lc); }
-    else if (!q.x && q.y) { diagA = c; diagB = sw; side1 = s; side2 = w;
+                         d2 = abs(ln - lne) + abs(le - lc);
+                         farConfirm = abs(lnn - ls) + abs(lee - lw); }
+    else if (!q.x && q.y) { diagB = sw; side1 = s; side2 = w;
                          d1 = abs(lsw - lc) + abs(ls - lw);
-                         d2 = abs(ls - lsw) + abs(lw - lc); }
-    else { diagA = c; diagB = se; side1 = s; side2 = e;
+                         d2 = abs(ls - lsw) + abs(lw - lc);
+                         farConfirm = abs(lss - ln) + abs(lww - le); }
+    else { diagB = se; side1 = s; side2 = e;
                          d1 = abs(lse - lc) + abs(ls - le);
-                         d2 = abs(ls - lse) + abs(le - lc); }
+                         d2 = abs(ls - lse) + abs(le - lc);
+                         farConfirm = abs(lss - ln) + abs(lee - lw); }
 
-    // corner distance within the quadrant: 0 at centre texel, 1 at
-    // the diagonal neighbour - used to fade the blend smoothly across
-    // the whole output resolution instead of a hard per-source-texel
-    // step, which is what gives this the "6x-class" smooth look
-    // regardless of the actual output/window resolution.
-    vec2 cornerFrac = q.x ? subpix - 0.5 : 0.5 - subpix;
-    cornerFrac = q.y ? cornerFrac : cornerFrac; // (kept explicit for clarity)
-    float cornerDist = clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
-                                  abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
-    cornerDist = 1.0 - cornerDist;
+    // smooth (not hard-cutoff) distance from the source-texel centre to
+    // the diagonal corner - blend strength now ramps continuously, which
+    // is what gives noticeably smoother diagonals than a single fixed
+    // blend factor, closer to a properly antialiased high-order upscale.
+    float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
+                                        abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
-    vec3 result = c;
-
-    // only blend near a genuine edge (skip flat areas entirely - keeps
-    // pixel-art regions perfectly crisp, avoids blur/ringing on flat
-    // fills which is the main failure mode of naive upscalers)
     float edgeMag = min(d1, d2);
-    if (edgeMag > 0.02)
-    {
-        vec3 blendTarget = (d1 < d2) ? mix(side1, side2, 0.5) : diagB;
-        float w2 = cornerDist * 0.6; // conservative blend strength
-        result = mix(c, blendTarget, w2);
-    }
+    // fold the far-neighbourhood confidence in: a real diagonal edge is
+    // still visible 2 texels out, noise/dither is not - this suppresses
+    // blending on dithered/noisy source material.
+    float confidence = smoothstep(0.0, 0.25, farConfirm);
+    float blendStrength = smoothstep(0.015, 0.09, edgeMag) * cornerDist * mix(0.35, 0.75, confidence);
 
-    return result;
+    vec3 blendTarget = (d1 < d2) ? mix(side1, side2, 0.5) : diagB;
+    return mix(c, blendTarget, blendStrength);
+}
+
+vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
+{
+    vec2 texSize = vec2(textureSize(tex, 0).xy);
+    vec2 texel = 1.0 / texSize;
+
+    // 4-tap rotated-grid supersampling: evaluate the edge/blend estimate
+    // at 4 sub-fragment offsets and average. This is what pushes quality
+    // beyond a plain single-sample xBR pass - it's the same trick MSAA
+    // uses, applied to our own shading instead of geometry, and is
+    // resolution-independent (scales for free with output/window size
+    // instead of needing a fixed "Nx" source-side factor).
+    vec2 o = texel * 0.17;
+    vec3 s0 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x, -o.y*0.5), uv.z), texSize);
+    vec3 s1 = xbrEdgeSample(tex, vec3(uv.xy + vec2( o.x*0.5, -o.y), uv.z), texSize);
+    vec3 s2 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x*0.5,  o.y), uv.z), texSize);
+    vec3 s3 = xbrEdgeSample(tex, vec3(uv.xy + vec2( o.x,  o.y*0.5), uv.z), texSize);
+
+    return (s0 + s1 + s2 + s3) * 0.25;
 }
 
 void main()

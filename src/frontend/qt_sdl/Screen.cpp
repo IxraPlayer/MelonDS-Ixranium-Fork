@@ -915,92 +915,6 @@ void ScreenPanel::calcSplashLayout()
 
 
 
-// "Sharp Upscale" (Beta): a small, self-written edge-directed 2x pixel-art
-// upscaler (EPX/Scale2x-style). For every source pixel P with neighbours
-// A(bove) B(elow) C(left) D(right), it looks at which neighbours agree with
-// each other diagonally and only then "extends" that neighbour's colour
-// into the corner - this turns staircase-y diagonal edges into a smoother
-// line without blurring flat-colour areas or losing any colour. Runs on the
-// tiny 256x192 DS framebuffer so the CPU cost is negligible.
-static inline void sharpUpscale2xRow(const QRgb* rowA, const QRgb* rowP, const QRgb* rowB,
-                                      QRgb* dst0, QRgb* dst1, int w)
-{
-    // Fast path: x in [1, w-2], no clamping needed, no lambda/indirection.
-    for (int x = 1; x < w - 1; x++)
-    {
-        QRgb P = rowP[x];
-        QRgb A = rowA[x];
-        QRgb B = rowB[x];
-        QRgb C = rowP[x - 1];
-        QRgb D = rowP[x + 1];
-
-        QRgb E0 = (C == A && C != D && A != B) ? A : P;
-        QRgb E1 = (A == D && A != C && D != B) ? D : P;
-        QRgb E2 = (C == B && C != D && B != A) ? C : P;
-        QRgb E3 = (D == B && D != C && B != A) ? B : P;
-
-        dst0[x * 2] = E0; dst0[x * 2 + 1] = E1;
-        dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
-    }
-}
-
-// "Sharp Upscale" (Beta): a small, self-written edge-directed 2x pixel-art
-// upscaler (EPX/Scale2x-style). For every source pixel P with neighbours
-// A(bove) B(elow) C(left) D(right), it looks at which neighbours agree with
-// each other diagonally and only then "extends" that neighbour's colour
-// into the corner - this turns staircase-y diagonal edges into a smoother
-// line without blurring flat-colour areas or losing any colour. Runs on the
-// tiny 256x192 DS framebuffer so the CPU cost is negligible, and is now
-// computed OUTSIDE the emu render lock (see paintEvent) so it can no longer
-// stall the emulation thread.
-static void sharpUpscale2x(const QImage& src, QImage& out)
-{
-    const int w = src.width(), h = src.height();
-    if (out.width() != w * 2 || out.height() != h * 2 || out.format() != QImage::Format_RGB32)
-        out = QImage(w * 2, h * 2, QImage::Format_RGB32);
-
-    auto at = [&](int x, int y) -> QRgb
-    {
-        x = std::clamp(x, 0, w - 1);
-        y = std::clamp(y, 0, h - 1);
-        return reinterpret_cast<const QRgb*>(src.constScanLine(y))[x];
-    };
-
-    for (int y = 0; y < h; y++)
-    {
-        const QRgb* rowP = reinterpret_cast<const QRgb*>(src.constScanLine(y));
-        const QRgb* rowA = reinterpret_cast<const QRgb*>(src.constScanLine(std::clamp(y - 1, 0, h - 1)));
-        const QRgb* rowB = reinterpret_cast<const QRgb*>(src.constScanLine(std::clamp(y + 1, 0, h - 1)));
-
-        QRgb* dst0 = reinterpret_cast<QRgb*>(out.scanLine(y * 2));
-        QRgb* dst1 = reinterpret_cast<QRgb*>(out.scanLine(y * 2 + 1));
-
-        // left/right border columns still need clamped neighbour lookups
-        for (int x = 0; x < w; x += (w > 1 ? w - 1 : 1))
-        {
-            QRgb P = at(x, y);
-            QRgb A = at(x, y - 1);
-            QRgb B = at(x, y + 1);
-            QRgb C = at(x - 1, y);
-            QRgb D = at(x + 1, y);
-
-            QRgb E0 = (C == A && C != D && A != B) ? A : P;
-            QRgb E1 = (A == D && A != C && D != B) ? D : P;
-            QRgb E2 = (C == B && C != D && B != A) ? C : P;
-            QRgb E3 = (D == B && D != C && B != A) ? B : P;
-
-            dst0[x * 2] = E0; dst0[x * 2 + 1] = E1;
-            dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
-
-            if (w <= 1) break;
-        }
-
-        // fast, unclamped interior
-        if (w > 2)
-            sharpUpscale2xRow(rowA, rowP, rowB, dst0, dst1, w);
-    }
-}
-
 ScreenPanelNative::ScreenPanelNative(QWidget* parent) : ScreenPanel(parent)
 {
     hasBuffers = false;
@@ -1079,36 +993,15 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
         QRect screenrc(0, 0, 256, 192);
 
         // SmoothPixmapTransform stays on for the normal "Screen filtering"
-        // path. For sharpUpscale it's applied further down, only for the
-        // single necessary scale step (see note there) - not stacked with
-        // a wasted intermediate resize like before.
+        // path. Edge-directed upscaling now lives entirely in the GL
+        // shader path (ScreenPanelGL / kScreenFS) - this software/QPainter
+        // fallback panel just draws the raw framebuffer.
         painter.setRenderHint(QPainter::SmoothPixmapTransform, filter);
 
         for (int i = 0; i < numScreens; i++)
         {
-            if (sharpUpscale)
-            {
-                // IMPORTANT: draw the upscaled image at its OWN (doubled)
-                // pixel size, and halve the transform to compensate -
-                // instead of drawing it into the original 256x192 rect,
-                // which was silently downscaling our 2x result straight
-                // back down to 1x before the final on-screen scale-up ever
-                // got to use it (i.e. it had zero visible effect before).
-                QImage& up = screenUpscaled[screenKind[i]];
-                sharpUpscale2x(screen[screenKind[i]], up);
-
-                QTransform t = screenTrans[i];
-                t.scale(0.5, 0.5);
-                painter.setTransform(t);
-                painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-                painter.drawImage(QRect(0, 0, up.width(), up.height()), up);
-                painter.setRenderHint(QPainter::SmoothPixmapTransform, filter);
-            }
-            else
-            {
-                painter.setTransform(screenTrans[i]);
-                painter.drawImage(screenrc, screen[screenKind[i]]);
-            }
+            painter.setTransform(screenTrans[i]);
+            painter.drawImage(screenrc, screen[screenKind[i]]);
         }
     }
 

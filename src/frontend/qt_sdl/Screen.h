@@ -268,8 +268,6 @@ private:
     void* bottomBuffer;
 
     QImage screen[2];
-    QImage screenUpscaled[2]; // reusable buffers for sharpUpscale2x, avoids
-                              // a per-frame allocation (was causing stutter)
     QTransform screenTrans[kMaxScreenTransforms];
 };
 
