@@ -163,6 +163,14 @@ public:
     // the user's global keyboard mapping is.
     void applyKeypadKeyOverride(const int (&nativeKeyMap)[12]);
 
+    // Read-only view of the live keyboard mapping actually driving input
+    // right now (may differ from what's on disk - e.g. a per-game control
+    // scheme override lives only here, never written to config). Used by
+    // KeyboardPreviewWidget so it reflects reality instead of the saved
+    // config, which is what it used to read.
+    const int* getKeyMapping() const { return keyMapping; }
+    const int* getHotkeyKeyMapping() const { return hkKeyMapping; }
+
     bool inputHotkeyDown(int id) { return hotkeyDown(id); }
     float inputMotionQuery(melonDS::Platform::MotionQueryType type);
 

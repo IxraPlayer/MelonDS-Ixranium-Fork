@@ -23,6 +23,7 @@
 #include <QMap>
 #include <QSet>
 #include <QString>
+#include <QTimer>
 #include <vector>
 
 class EmuInstance;
@@ -66,12 +67,18 @@ private:
 
     void buildLayout();
     const KeyCell* cellAt(const QPoint& pos) const;
+    double maxX() const;
+    double maxY() const;
     // Returns the display names of everything bound to this cell's key
     // (matching ignores the KeypadModifier/right-side bit so both a plain
     // key and its numpad/right-hand twin can be told apart visually).
     QStringList controlsForCell(const KeyCell& cell) const;
 
     std::vector<KeyCell> cells;
+    // Overall bounding box of `cells` in the same *100 unscaled space,
+    // computed once in buildLayout() instead of re-scanned on every single
+    // paint/hit-test/hover-poll (the layout never changes after construction).
+    double layoutMaxX = 0, layoutMaxY = 0;
     // base Qt::Key (masked) -> list of "control name" bound to it.
     // Keys are stored twice when needed: once as-is and once with the
     // Keypad flag stripped, so numpad-cluster presets still light up the
@@ -82,6 +89,15 @@ private:
     // currently physically held-down keys, for the yellow "live" glow
     QSet<int> pressedBase;
     QSet<int> pressedNumpadBase;
+
+    // The docked in-game overlay is WA_TransparentForMouseEvents (clicks
+    // must fall through to the DS touch screen underneath), which also
+    // blocks Qt's normal hover/tooltip event delivery. This timer polls
+    // the global cursor instead, so hovering a bound key still shows what
+    // it's bound to even though the widget itself never sees the mouse.
+    QTimer* hoverPollTimer = nullptr;
+    const KeyCell* lastHoverCell = nullptr;
+    void pollHover();
 };
 
 #endif // KEYBOARDPREVIEWWIDGET_H

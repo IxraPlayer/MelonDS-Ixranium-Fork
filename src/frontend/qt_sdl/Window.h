@@ -109,6 +109,8 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
     void positionLiveKeyboardPreview();
+    void updateLiveKeyboardPreviewVisibility();
+    void refreshKeyboardPreviews();
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
@@ -276,6 +278,11 @@ public:
     // background.
     QWidget* pauseMenuOverlay = nullptr;
     class KeyboardPreviewWidget* liveKeyboardPreview = nullptr;
+    // The pause menu's own preview widget (separate instance from
+    // liveKeyboardPreview, only alive while pauseMenuOverlay is up) - kept
+    // here too so key presses can be mirrored into whichever one is
+    // actually on screen right now.
+    class KeyboardPreviewWidget* pausedKeyboardPreview = nullptr;
     void togglePauseMenu();
     void closePauseMenu();
     QStackedWidget* centralStack = nullptr;

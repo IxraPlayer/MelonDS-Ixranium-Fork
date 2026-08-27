@@ -354,6 +354,7 @@ void InputConfigDialog::commitAndSave()
     Config::Save();
 
     emuInstance->inputLoadConfig();
+    emit mappingsChanged();
 }
 
 void InputConfigDialog::populatePage(QWidget* page,

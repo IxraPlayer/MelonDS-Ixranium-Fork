@@ -33,6 +33,7 @@
 #include <QLabel>
 #include <QEvent>
 #include <QPointer>
+#include <QTimer>
 #include <QEventLoop>
 #include <QScreen>
 #include <QGuiApplication>
@@ -128,6 +129,7 @@ private:
             return;
         m_reentrant = true;
 
+        if (!m_menu) { m_reentrant = false; return; }
         m_menu->setWindowOpacity(1.0);
 
         QEventLoop loop;
@@ -137,17 +139,26 @@ private:
         anim.setEndValue(0.0);
         anim.setEasingCurve(QEasingCurve::InCubic);
         connect(&anim, &QPropertyAnimation::finished, &loop, &QEventLoop::quit);
+
+        // Safety net: under heavy load - or if the menu gets torn down
+        // mid-animation - "finished" can fail to fire, which used to hang
+        // this nested loop forever: the dropdown would stay open with no
+        // way to close it short of killing the app. Force the loop to
+        // exit after a hard cap so a close attempt can never get stuck.
+        QTimer::singleShot(250, &loop, &QEventLoop::quit);
+
         anim.start();
         loop.exec();
 
         // Reset for the next time this menu opens; harmless if the menu
-        // got deleted mid-loop since m_menu is only touched through the
-        // still-alive QPropertyAnimation/QObject parent chain above.
-        m_menu->setWindowOpacity(1.0);
+        // got deleted mid-loop, since m_menu is now a QPointer and this
+        // check reflects that.
+        if (m_menu)
+            m_menu->setWindowOpacity(1.0);
         m_reentrant = false;
     }
 
-    QMenu* m_menu;
+    QPointer<QMenu> m_menu;
     QPointer<QPropertyAnimation> m_posAnim;
     QPointer<QPropertyAnimation> m_opAnim;
     bool m_reentrant = false;

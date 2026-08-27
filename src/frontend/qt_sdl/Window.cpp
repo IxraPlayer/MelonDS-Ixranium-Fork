@@ -1053,7 +1053,8 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     liveKeyboardPreview->refreshFromInstance(emuInstance);
     positionLiveKeyboardPreview();
     liveKeyboardPreview->raise();
-    liveKeyboardPreview->setVisible(showKeyboardPreview);
+    liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
+    updateLiveKeyboardPreviewVisibility();
 }
 
 MainWindow::~MainWindow()
@@ -1328,6 +1329,12 @@ void MainWindow::keyPressEvent(QKeyEvent* event)
         if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
         liveKeyboardPreview->setKeyState(raw, true);
     }
+    if (pausedKeyboardPreview)
+    {
+        int raw = event->key();
+        if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
+        pausedKeyboardPreview->setKeyState(raw, true);
+    }
 
     emuInstance->onKeyPress(event);
 }
@@ -1341,6 +1348,12 @@ void MainWindow::keyReleaseEvent(QKeyEvent* event)
         int raw = event->key();
         if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
         liveKeyboardPreview->setKeyState(raw, false);
+    }
+    if (pausedKeyboardPreview)
+    {
+        int raw = event->key();
+        if (event->modifiers() & Qt::KeypadModifier) raw |= Qt::KeypadModifier;
+        pausedKeyboardPreview->setKeyState(raw, false);
     }
 
     emuInstance->onKeyRelease(event);
@@ -2129,6 +2142,7 @@ void MainWindow::onLibraryGameActivated(QString path)
         if (ControlSchemeStore::load(overrideScheme, nativeMap))
             emuInstance->applyKeypadKeyOverride(nativeMap);
     }
+    refreshKeyboardPreviews();
 
     recentFileList.removeAll(path);
     recentFileList.prepend(path);
@@ -2727,12 +2741,13 @@ void MainWindow::onOpenInputConfig()
 
     InputConfigDialog* dlg = InputConfigDialog::openDlg(this);
     connect(dlg, &InputConfigDialog::finished, this, &MainWindow::onInputConfigFinished);
+    connect(dlg, &InputConfigDialog::mappingsChanged, this, &MainWindow::refreshKeyboardPreviews);
 }
 
 void MainWindow::onInputConfigFinished(int res)
 {
     emuThread->emuUnpause();
-    if (liveKeyboardPreview) liveKeyboardPreview->refreshFromInstance(emuInstance);
+    refreshKeyboardPreviews();
 }
 
 void MainWindow::onOpenVideoSettings()
@@ -3008,9 +3023,9 @@ void MainWindow::onChangeShowKeyboardPreview(bool checked)
     if (liveKeyboardPreview)
     {
         if (checked) liveKeyboardPreview->refreshFromInstance(emuInstance);
-        liveKeyboardPreview->setVisible(checked);
         positionLiveKeyboardPreview();
     }
+    updateLiveKeyboardPreviewVisibility();
 }
 
 void MainWindow::onChangeLimitFramerate(bool checked)
@@ -3117,6 +3132,22 @@ void MainWindow::positionLiveKeyboardPreview()
     liveKeyboardPreview->move(width() - liveKeyboardPreview->width() - 16,
                                height() - liveKeyboardPreview->height() - 16);
     liveKeyboardPreview->raise();
+}
+
+void MainWindow::updateLiveKeyboardPreviewVisibility()
+{
+    if (!liveKeyboardPreview) return;
+    // Only ever shown during actual gameplay: hidden in the library, and
+    // hidden while the pause menu is up (which draws its own separate
+    // preview - having both on screen at once is what used to overlap).
+    bool inGame = !showingLibrary && emuInstance && emuInstance->emuIsActive() && !pauseMenuOverlay;
+    liveKeyboardPreview->setVisible(showKeyboardPreview && inGame);
+}
+
+void MainWindow::refreshKeyboardPreviews()
+{
+    if (liveKeyboardPreview) liveKeyboardPreview->refreshFromInstance(emuInstance);
+    if (pausedKeyboardPreview) pausedKeyboardPreview->refreshFromInstance(emuInstance);
 }
 
 #ifdef Q_OS_WIN
@@ -3329,12 +3360,21 @@ void MainWindow::togglePauseMenu()
     auto* kbPreview = new KeyboardPreviewWidget(pauseMenuOverlay);
     kbPreview->setFixedSize(400, 140);
     kbPreview->refreshFromInstance(emuInstance);
+    pausedKeyboardPreview = kbPreview;
+    // The overlay owns kbPreview and will delete it along with itself in
+    // closePauseMenu; drop our pointer to it at that same moment so we
+    // never touch a dangling widget.
+    connect(kbPreview, &QObject::destroyed, this, [this]() { pausedKeyboardPreview = nullptr; });
 
     auto* kbRow = new QHBoxLayout();
     kbRow->addStretch();
     kbRow->addWidget(kbPreview);
     kbRow->setContentsMargins(0, 0, 18, 14);
     outer->addLayout(kbRow);
+
+    // The docked in-game preview and this one would otherwise overlap in
+    // the same corner - only one is ever shown at a time.
+    updateLiveKeyboardPreviewVisibility();
 
     // Fade the whole overlay (dimmer + panel together) in rather than
     // popping it in instantly - reads much less jarring mid-gameplay.
@@ -3364,6 +3404,8 @@ void MainWindow::closePauseMenu()
                                 // second Escape mid-fade-out re-opens
                                 // cleanly instead of trying to fade an
                                 // overlay that's already on its way out
+    pausedKeyboardPreview = nullptr; // its widget is going away with the
+                                      // overlay (see destroyed() connection above)
 
     auto* fadeOut = new QPropertyAnimation(overlay, "windowOpacity", overlay);
     fadeOut->setDuration(120);
@@ -3374,6 +3416,7 @@ void MainWindow::closePauseMenu()
     fadeOut->start(QAbstractAnimation::DeleteWhenStopped);
 
     emuThread->emuUnpause();
+    updateLiveKeyboardPreviewVisibility(); // the docked preview can come back now
 }
 
 void MainWindow::changeEvent(QEvent* event)
@@ -3418,6 +3461,7 @@ void MainWindow::onEmuStart()
     showingLibrary = false;
     if (centralStack) centralStack->setCurrentWidget(panel);
     if (liveKeyboardPreview) liveKeyboardPreview->raise();
+    updateLiveKeyboardPreviewVisibility();
 #if defined(Q_OS_WIN)
     // See createScreenPanel() for why this is needed on Windows only.
     if (library) library->setVisible(false);
@@ -3458,6 +3502,7 @@ void MainWindow::onEmuStop()
     showingLibrary = true;
     if (centralStack) centralStack->setCurrentWidget(library);
     if (liveKeyboardPreview) liveKeyboardPreview->raise();
+    updateLiveKeyboardPreviewVisibility();
 #if defined(Q_OS_WIN)
     // See createScreenPanel() for why this is needed on Windows only.
     if (panel) panel->setVisible(false);

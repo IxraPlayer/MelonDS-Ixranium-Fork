@@ -23,6 +23,7 @@
 #include <QHelpEvent>
 #include <QToolTip>
 #include <QStringList>
+#include <QCursor>
 #include <algorithm>
 
 #include "Config.h"
@@ -46,6 +47,11 @@ KeyboardPreviewWidget::KeyboardPreviewWidget(QWidget* parent) : QWidget(parent)
 {
     setMouseTracking(true);
     buildLayout();
+
+    hoverPollTimer = new QTimer(this);
+    hoverPollTimer->setInterval(80);
+    connect(hoverPollTimer, &QTimer::timeout, this, &KeyboardPreviewWidget::pollHover);
+    hoverPollTimer->start();
 }
 
 QSize KeyboardPreviewWidget::sizeHint() const
@@ -148,6 +154,13 @@ void KeyboardPreviewWidget::buildLayout()
         addNp(".",Qt::Key_Period,2,4);
         addNp("Ent",Qt::Key_Enter,3,3,1,2);
     }
+
+    layoutMaxX = 0; layoutMaxY = 0;
+    for (const KeyCell& c : cells)
+    {
+        layoutMaxX = std::max(layoutMaxX, (c.rect.x() + c.rect.width()) / 100.0);
+        layoutMaxY = std::max(layoutMaxY, (c.rect.y() + c.rect.height()) / 100.0);
+    }
 }
 
 void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
@@ -156,8 +169,13 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
     boundNumpadKeys.clear();
     if (!inst) { update(); return; }
 
-    Config::Table& instcfg = inst->getLocalConfig();
-    Config::Table keycfg = instcfg.GetTable("Keyboard");
+    // Read from the live mapping actually driving input right now, not
+    // from the on-disk config - they can differ (a per-game control scheme
+    // override, or an edit made in InputConfigDialog that hasn't been
+    // reloaded into this instance yet), and this widget should always show
+    // what's really active.
+    const int* keyMap = inst->getKeyMapping();
+    const int* hkKeyMap = inst->getHotkeyKeyMapping();
 
     auto record = [&](const QString& label, int stored)
     {
@@ -170,7 +188,7 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
     for (int i = 0; i < 12; i++)
     {
         QString label = QString::fromUtf8(EmuInstance::buttonNames[i]) + QStringLiteral(" (DS tuşu)");
-        record(label, keycfg.GetInt(EmuInstance::buttonNames[i]));
+        record(label, keyMap[i]);
     }
 
     auto niceHotkeyLabel = [&](int hk) -> QString
@@ -186,7 +204,7 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
     for (int hk = 0; hk < HK_MAX; hk++)
     {
         QString label = niceHotkeyLabel(hk) + QStringLiteral(" (Kısayol)");
-        record(label, keycfg.GetInt(EmuInstance::hotkeyNames[hk]));
+        record(label, hkKeyMap[hk]);
     }
 
     update();
@@ -195,11 +213,30 @@ void KeyboardPreviewWidget::refreshFromInstance(EmuInstance* inst)
 void KeyboardPreviewWidget::setKeyState(int rawQtKeyWithMods, bool pressed)
 {
     int base = baseKeyOf(rawQtKeyWithMods);
-    QSet<int>& set = isNumpadOf(rawQtKeyWithMods) ? pressedNumpadBase : pressedBase;
+    bool numpad = isNumpadOf(rawQtKeyWithMods);
+    QSet<int>& set = numpad ? pressedNumpadBase : pressedBase;
     if (pressed) set.insert(base);
     else         set.remove(base);
-    update();
+
+    // Repaint just this key's cell(s) instead of the whole 400x140 widget
+    // on every single press/release during gameplay - cheap enough not to
+    // add any noticeable per-keystroke cost.
+    if (maxX() <= 0 || maxY() <= 0) { update(); return; }
+    double s = std::min(width() / maxX(), height() / maxY());
+    QRect dirty;
+    for (const KeyCell& c : cells)
+    {
+        if (baseKeyOf(c.qtKey) != base || isNumpadOf(c.qtKey) != numpad) continue;
+        QRect r(int(c.rect.x()/100.0*s), int(c.rect.y()/100.0*s),
+                int(c.rect.width()/100.0*s)+2, int(c.rect.height()/100.0*s)+2);
+        dirty = dirty.isNull() ? r : dirty.united(r);
+    }
+    if (!dirty.isNull()) update(dirty.adjusted(-2, -2, 2, 2));
+    else update();
 }
+
+double KeyboardPreviewWidget::maxX() const { return layoutMaxX; }
+double KeyboardPreviewWidget::maxY() const { return layoutMaxY; }
 
 QStringList KeyboardPreviewWidget::controlsForCell(const KeyCell& cell) const
 {
@@ -210,19 +247,10 @@ QStringList KeyboardPreviewWidget::controlsForCell(const KeyCell& cell) const
 
 const KeyboardPreviewWidget::KeyCell* KeyboardPreviewWidget::cellAt(const QPoint& pos) const
 {
-    if (cells.empty()) return nullptr;
+    if (cells.empty() || layoutMaxX <= 0 || layoutMaxY <= 0) return nullptr;
 
-    // rebuild the same scale transform paintEvent uses
-    double maxX = 0, maxY = 0;
-    for (const KeyCell& c : cells)
-    {
-        maxX = std::max(maxX, (c.rect.x() + c.rect.width()) / 100.0);
-        maxY = std::max(maxY, (c.rect.y() + c.rect.height()) / 100.0);
-    }
-    if (maxX <= 0 || maxY <= 0) return nullptr;
-
-    double sx = width() / maxX;
-    double sy = height() / maxY;
+    double sx = width() / layoutMaxX;
+    double sy = height() / layoutMaxY;
     double s = std::min(sx, sy);
 
     for (const KeyCell& c : cells)
@@ -237,6 +265,8 @@ bool KeyboardPreviewWidget::event(QEvent* event)
 {
     if (event->type() == QEvent::ToolTip)
     {
+        // Normal path, used when this widget DOES receive mouse events
+        // (the pause menu's copy - it isn't click-through).
         QHelpEvent* he = static_cast<QHelpEvent*>(event);
         const KeyCell* c = cellAt(he->pos());
         if (c)
@@ -254,23 +284,44 @@ bool KeyboardPreviewWidget::event(QEvent* event)
     return QWidget::event(event);
 }
 
+void KeyboardPreviewWidget::pollHover()
+{
+    // Used by the docked in-game overlay, which is click-through
+    // (WA_TransparentForMouseEvents) so it never gets real hover events -
+    // poll the cursor position manually instead.
+    if (!isVisible()) return;
+
+    QPoint local = mapFromGlobal(QCursor::pos());
+    const KeyCell* c = rect().contains(local) ? cellAt(local) : nullptr;
+
+    if (c == lastHoverCell) return;
+    lastHoverCell = c;
+
+    if (!c)
+    {
+        QToolTip::hideText();
+        return;
+    }
+
+    QStringList controls = controlsForCell(*c);
+    if (controls.isEmpty())
+    {
+        QToolTip::hideText();
+        return;
+    }
+
+    QToolTip::showText(QCursor::pos(), controls.join(", "), this);
+}
+
 void KeyboardPreviewWidget::paintEvent(QPaintEvent*)
 {
-    if (cells.empty()) return;
+    if (cells.empty() || layoutMaxX <= 0 || layoutMaxY <= 0) return;
 
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
 
-    double maxX = 0, maxY = 0;
-    for (const KeyCell& c : cells)
-    {
-        maxX = std::max(maxX, (c.rect.x() + c.rect.width()) / 100.0);
-        maxY = std::max(maxY, (c.rect.y() + c.rect.height()) / 100.0);
-    }
-    if (maxX <= 0 || maxY <= 0) return;
-
-    double sx = width() / maxX;
-    double sy = height() / maxY;
+    double sx = width() / layoutMaxX;
+    double sy = height() / layoutMaxY;
     double s = std::min(sx, sy);
 
     QFont f = p.font();

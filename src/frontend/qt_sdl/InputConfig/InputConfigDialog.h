@@ -143,6 +143,13 @@ class InputConfigDialog : public QDialog
 {
     Q_OBJECT
 
+signals:
+    // Fired every time a mapping actually changes and gets committed (see
+    // commitAndSave) - lets whatever's showing a live keyboard preview
+    // (the docked overlay, the pause menu) stay in sync without needing
+    // this dialog to be closed and reopened first.
+    void mappingsChanged();
+
 public:
     explicit InputConfigDialog(QWidget* parent);
     ~InputConfigDialog();
