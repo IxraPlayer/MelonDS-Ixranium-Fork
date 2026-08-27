@@ -1263,6 +1263,7 @@ void ScreenPanelGL::initOpenGL()
 
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
+    screenShaderSharpUpscaleULoc = glGetUniformLocation(screenShaderProgram, "uSharpUpscale");
 
     const float vertices[] =
     {
@@ -1483,6 +1484,7 @@ void ScreenPanelGL::drawScreen()
 
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
+        glUniform1i(screenShaderSharpUpscaleULoc, sharpUpscale ? 1 : 0);
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))

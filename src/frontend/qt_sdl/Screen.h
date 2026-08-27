@@ -316,6 +316,7 @@ private:
     GLuint screenTexture;
     GLuint screenShaderProgram;
     GLint screenShaderTransformULoc, screenShaderScreenSizeULoc;
+    GLint screenShaderSharpUpscaleULoc;
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;
