@@ -1027,24 +1027,37 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         QRect screenrc(0, 0, 256, 192);
 
+        // SmoothPixmapTransform stays on for the normal "Screen filtering"
+        // path. For sharpUpscale it's applied further down, only for the
+        // single necessary scale step (see note there) - not stacked with
+        // a wasted intermediate resize like before.
         painter.setRenderHint(QPainter::SmoothPixmapTransform, filter);
-        // Note: SmoothPixmapTransform is intentionally NOT enabled for
-        // sharpUpscale. Our own algorithm already smooths the diagonal
-        // edges; stacking Qt's software (non-GL) bilinear scaling on top
-        // of that was extremely CPU-heavy on the raster backend and could
-        // stall the main/GUI thread long enough to look like the whole
-        // window (mouse, keyboard) had frozen.
 
         for (int i = 0; i < numScreens; i++)
         {
-            painter.setTransform(screenTrans[i]);
             if (sharpUpscale)
             {
-                sharpUpscale2x(screen[screenKind[i]], screenUpscaled[screenKind[i]]);
-                painter.drawImage(screenrc, screenUpscaled[screenKind[i]]);
+                // IMPORTANT: draw the upscaled image at its OWN (doubled)
+                // pixel size, and halve the transform to compensate -
+                // instead of drawing it into the original 256x192 rect,
+                // which was silently downscaling our 2x result straight
+                // back down to 1x before the final on-screen scale-up ever
+                // got to use it (i.e. it had zero visible effect before).
+                QImage& up = screenUpscaled[screenKind[i]];
+                sharpUpscale2x(screen[screenKind[i]], up);
+
+                QTransform t = screenTrans[i];
+                t.scale(0.5, 0.5);
+                painter.setTransform(t);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+                painter.drawImage(QRect(0, 0, up.width(), up.height()), up);
+                painter.setRenderHint(QPainter::SmoothPixmapTransform, filter);
             }
             else
+            {
+                painter.setTransform(screenTrans[i]);
                 painter.drawImage(screenrc, screen[screenKind[i]]);
+            }
         }
         emuInstance->renderLock.unlock();
     }
