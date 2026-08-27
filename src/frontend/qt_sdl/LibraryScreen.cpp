@@ -1,4 +1,6 @@
 #include "LibraryScreen.h"
+#include <QOpenGLWidget>
+#include <QSurfaceFormat>
 #include <QFileInfo>
 #include <QScrollArea>
 #include <QVBoxLayout>
@@ -407,9 +409,18 @@ void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
         AccentHueShift = 0; // dark_glass, neo_modern, or unset - keep turquoise default
 }
 
-LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
+LibraryScreen::LibraryScreen(QWidget* parent) : QOpenGLWidget(parent), columns(5), bgHue(0.58)
 {
     setObjectName("libraryScreen");
+
+    // Ask for a plain, no-multisample GL2-compatible context - this widget
+    // only ever draws through QPainter (never raw GL calls), so all that's
+    // needed is a context to composite into; MSAA would just cost fill-rate
+    // for zero visible benefit given everything here is already
+    // antialiased by QPainter itself.
+    QSurfaceFormat fmt;
+    fmt.setSamples(0);
+    setFormat(fmt);
 
     loadConsoleOverrides();
     loadSchemeOverrides();
@@ -432,6 +443,18 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     // was reading as a hard "frame" around the wave instead of a smooth
     // blend into it.
     scroll->setStyleSheet("QScrollArea { background: transparent; }");
+
+    // Give the tile viewport its own GL-composited surface too - each
+    // GameCardButton paints an antialiased rounded panel, sheen, border and
+    // an animated conical-gradient glow on hover, and with a large library
+    // that's a lot of tiles doing that in software every repaint. Routing
+    // the viewport through OpenGL moves that blending to the GPU the same
+    // way it does for this widget's own background above.
+    auto* glViewport = new QOpenGLWidget(scroll);
+    QSurfaceFormat viewportFmt;
+    viewportFmt.setSamples(0);
+    glViewport->setFormat(viewportFmt);
+    scroll->setViewport(glViewport);
     scroll->viewport()->setStyleSheet("background: transparent;");
 
     auto* inner = new QWidget();
