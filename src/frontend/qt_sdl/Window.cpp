@@ -1087,6 +1087,22 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     positionLiveKeyboardPreview();
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
     updateLiveKeyboardPreviewVisibility();
+
+#ifdef _WIN32
+    // Qt::Tool is supposed to keep this out of the taskbar/alt-tab on its
+    // own, but on Windows the native HWND is sometimes created (or later
+    // touched by the window manager) with WS_EX_APPWINDOW still set,
+    // which makes it show up as its own separate taskbar entry even
+    // though it's flagged as a tool window. Force the exstyle by hand
+    // once the native window exists so it always stays merged under
+    // MainWindow instead of getting its own icon.
+    liveKeyboardPreview->winId(); // force native HWND creation now
+    HWND kbHwnd = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
+    LONG_PTR exStyle = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
+    exStyle |= WS_EX_TOOLWINDOW;
+    exStyle &= ~WS_EX_APPWINDOW;
+    SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, exStyle);
+#endif
 }
 
 MainWindow::~MainWindow()
