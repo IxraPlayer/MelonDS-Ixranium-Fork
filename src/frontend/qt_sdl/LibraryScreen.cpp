@@ -633,28 +633,25 @@ void LibraryScreen::addGame(const QString& path)
     tile->setAcceptDrops(true);
     tile->installEventFilter(this);
 
-    // [Asenkron Optimizasyon]
-    // İkon okuma ve scale2x işlemleri arka plan iş parçacığına devredildi. 
-    // Ana kilitlenmeler ve kasmalar önlendi!
-    QFutureWatcher<QImage>* watcher = new QFutureWatcher<QImage>(tile);
-    connect(watcher, &QFutureWatcher<QImage>::finished, this, [tile, watcher]() {
-        QImage img = watcher->result();
-        if (!img.isNull()) {
-            tile->setGameIconPixmap(QPixmap::fromImage(img));
-        }
-        watcher->deleteLater();
-    });
-    
-    watcher->setFuture(QtConcurrent::run([path]() -> QImage {
+// [Asenkron Optimizasyon - QThread Yolu]
+    // QtConcurrent modülüne ihtiyaç duymadan ikon yüklemeyi arka planda yapar.
+    QThread::create([tile, path]() {
         QImage iconImg = loadRomIconImage(path);
-        if (iconImg.isNull()) return QImage();
+        if (iconImg.isNull()) return;
 
         const int iconSize = 48;
         QImage scaled = scale2x(scale2x(iconImg));
-        if (scaled.width() > iconSize || scaled.height() > iconSize)
+        if (scaled.width() > iconSize || scaled.height() > iconSize) {
             scaled = scaled.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        return scaled;
-    }));
+        }
+
+        // Arka planda işlenen görseli Ana Thread (UI) üzerinde butonun simgesi yapıyoruz
+        QMetaObject::invokeMethod(tile, [tile, scaled]() {
+            if (!scaled.isNull()) {
+                tile->setGameIconPixmap(QPixmap::fromImage(scaled));
+            }
+        });
+    })->start();
 
     connect(tile, &QToolButton::clicked, this, [this, path]()
     {
