@@ -50,6 +50,7 @@
 #endif
 #if defined(Q_OS_LINUX)
 #include <QGuiApplication>
+#include <QtGui/qguiapplication_platform.h> // QNativeInterface::QX11Application
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 // Xlib.h #defines plain identifiers like None/Bool/Status/Unsorted/etc as
@@ -1088,7 +1089,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
     updateLiveKeyboardPreviewVisibility();
 
-#ifdef _WIN32
+#ifdef Q_OS_WIN
     // Qt::Tool is supposed to keep this out of the taskbar/alt-tab on its
     // own, but on Windows the native HWND is sometimes created (or later
     // touched by the window manager) with WS_EX_APPWINDOW still set,
@@ -1102,6 +1103,28 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     exStyle |= WS_EX_TOOLWINDOW;
     exStyle &= ~WS_EX_APPWINDOW;
     SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, exStyle);
+#elif defined(Q_OS_LINUX)
+    // Same idea on X11: Qt::Tool usually keeps this out of the taskbar,
+    // but some window managers only reliably honor it via the explicit
+    // EWMH _NET_WM_STATE_SKIP_TASKBAR/SKIP_PAGER hints. Set those by hand
+    // once the native window exists. (Wayland has no equivalent knob;
+    // there Qt::Tool is all we can do, and every compositor we've tested
+    // already respects it.)
+    if (QGuiApplication::platformName() == "xcb")
+    {
+        liveKeyboardPreview->winId(); // force native X11 window creation now
+        if (auto* x11App = qGuiApp->nativeInterface<QNativeInterface::QX11Application>())
+        {
+            Display* dpy = x11App->display();
+            Window w = (Window)liveKeyboardPreview->winId();
+            Atom netWmState = XInternAtom(dpy, "_NET_WM_STATE", False);
+            Atom skipTaskbar = XInternAtom(dpy, "_NET_WM_STATE_SKIP_TASKBAR", False);
+            Atom skipPager = XInternAtom(dpy, "_NET_WM_STATE_SKIP_PAGER", False);
+            Atom states[2] = { skipTaskbar, skipPager };
+            XChangeProperty(dpy, w, netWmState, XA_ATOM, 32, PropModeAppend,
+                             (unsigned char*)states, 2);
+        }
+    }
 #endif
 }
 
