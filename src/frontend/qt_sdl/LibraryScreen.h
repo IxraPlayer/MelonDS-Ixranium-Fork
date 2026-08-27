@@ -65,6 +65,8 @@ signals:
 protected:
     void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
     // Watches every tile (including the "+" add-tile) to implement
     // press-and-drag reordering: press-drag past the OS drag threshold
@@ -109,6 +111,14 @@ private:
     double bgHue;
     double bgPhase = 0.0;
     QTimer* bgAnimTimer;
+
+    // The corner vignette never changes shape/color, only the widget size
+    // it's stretched over - it was being recomputed (a full-window radial
+    // gradient fill) on every single 50ms background tick for no reason.
+    // Cached here and only rebuilt on resize/first paint.
+    QPixmap vignetteCache;
+    QSize vignetteCacheSize;
+    void rebuildVignetteCache(const QRectF& r, const QPainterPath& path);
 };
 
 #endif

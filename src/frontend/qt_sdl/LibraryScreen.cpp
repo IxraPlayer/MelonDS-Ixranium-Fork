@@ -17,6 +17,8 @@
 #include <QEasingCurve>
 #include <QEnterEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
+#include <QHideEvent>
 #include <cstddef>
 #include <cmath>
 #include <algorithm>
@@ -561,6 +563,42 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
+void LibraryScreen::rebuildVignetteCache(const QRectF& r, const QPainterPath& path)
+{
+    vignetteCacheSize = size();
+    vignetteCache = QPixmap(vignetteCacheSize);
+    vignetteCache.fill(Qt::transparent);
+
+    QPainter p(&vignetteCache);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    QRadialGradient vignette(r.center(), std::max(r.width(), r.height()) * 0.75);
+    vignette.setColorAt(0.0, QColor(0, 0, 0, 0));
+    vignette.setColorAt(0.6, QColor(0, 0, 0, 90));
+    vignette.setColorAt(1.0, QColor(0, 0, 0, 220));
+    p.fillPath(path, vignette);
+}
+
+void LibraryScreen::showEvent(QShowEvent* event)
+{
+    // Resume the background animation only while the library screen is
+    // actually the visible page - it used to keep ticking (and repainting
+    // the whole window's blob/gradient background 20x/sec) forever in the
+    // background even while a game was running and this screen was
+    // nowhere on screen, which is pure wasted CPU/GPU work and was part
+    // of what made things feel like they were "kasıyor" overall.
+    if (bgAnimTimer && !bgAnimTimer->isActive())
+        bgAnimTimer->start(50);
+    QWidget::showEvent(event);
+}
+
+void LibraryScreen::hideEvent(QHideEvent* event)
+{
+    if (bgAnimTimer)
+        bgAnimTimer->stop();
+    QWidget::hideEvent(event);
+}
+
 void LibraryScreen::onBgTick()
 {
     bgPhase += 0.0070; // 2x speed
@@ -646,12 +684,13 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
 
     // Permanent black vignette: stays constant regardless of the bg
     // animation, darkening the corners/edges while leaving the center
-    // clear so tiles/text stay readable.
-    QRadialGradient vignette(r.center(), std::max(r.width(), r.height()) * 0.75);
-    vignette.setColorAt(0.0, QColor(0, 0, 0, 0));
-    vignette.setColorAt(0.6, QColor(0, 0, 0, 90));
-    vignette.setColorAt(1.0, QColor(0, 0, 0, 220));
-    painter.fillPath(path, vignette);
+    // clear so tiles/text stay readable. This used to be a fresh
+    // QRadialGradient fill over the *entire* window every single 50ms
+    // tick, purely for a layer that never actually changes - now it's
+    // rendered once into a cached pixmap and only rebuilt on resize.
+    if (vignetteCache.isNull() || vignetteCacheSize != size())
+        rebuildVignetteCache(r, path);
+    painter.drawPixmap(0, 0, vignetteCache);
 
     QWidget::paintEvent(event);
 }
