@@ -116,10 +116,12 @@ vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
 
     // Pull the centre towards whichever side of the line is more
     // extreme relative to it - this is what thins a line down instead
-    // of just blurring across it.
+    // of just blurring across it. Kept subtle: too strong a pull here
+    // drags in wrong-side colour on any real edge and reads as smeared,
+    // haloed artifacting rather than a sharper line.
     vec3 target = (abs(lp - lc) > abs(lm - lc)) ? pushPos : pushNeg;
 
-    float strength = smoothstep(0.02, 0.18, gmag) * 0.55;
+    float strength = smoothstep(0.06, 0.30, gmag) * 0.25;
     return mix(c, target, strength);
 }
 
@@ -144,10 +146,12 @@ vec3 refinePass(sampler2DArray tex, vec3 uv, vec3 center)
     // every direction instead of only along the axes.
     vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
 
-    const float kSharpAmount = 1.3;
-    // Clamp the push so real edges sharpen hard without blowing out
-    // into visible halos/ringing on high-contrast boundaries.
-    vec3 diff = clamp(center - blur, -0.45, 0.45);
+    const float kSharpAmount = 0.6;
+    // Clamp the push so real edges sharpen without blowing out into
+    // visible halos/ringing on high-contrast boundaries - this pass
+    // runs on top of the push step above rather than raw source, so it
+    // needs a lighter touch than a standalone unsharp mask would.
+    vec3 diff = clamp(center - blur, -0.25, 0.25);
     return clamp(center + diff * kSharpAmount, 0.0, 1.0);
 }
 
