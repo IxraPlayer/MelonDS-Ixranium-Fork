@@ -145,19 +145,22 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
         float mainScale = std::min(screenWidth / 256.f, screenHeight / 192.f);
         if (integerScale) mainScale = floorf(mainScale);
 
-        M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
-        M23_Scale(TopScreenMtx, mainScale);
-        M23_Translate(TopScreenMtx, screenWidth/2.f, screenHeight/2.f);
-
-        // small screen: ~28% of the window width, anchored to the top-right,
-        // with a small margin
+        // small screen: ~22% of the window width, docked flush to the right
+        // edge, near the top
         float margin = screenGap > 0 ? (float)screenGap : 16.f;
-        float smallW = screenWidth * 0.28f;
+        float smallW = screenWidth * 0.22f;
         float smallScale = smallW / 256.f;
         if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
         float smallH = 192.f * smallScale;
 
-        float fbotTransX = screenWidth - margin - smallW/2.f;
+        // shift the top screen left so it never sits under the small screen
+        float topShiftX = smallW * 0.55f;
+
+        M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
+        M23_Scale(TopScreenMtx, mainScale);
+        M23_Translate(TopScreenMtx, (screenWidth/2.f) - topShiftX, screenHeight/2.f);
+
+        float fbotTransX = screenWidth - smallW/2.f; // flush against the right edge
         float fbotTransY = margin + smallH/2.f;
 
         M23_Translate(BotScreenMtx, -256/2.f, -192/2.f);
