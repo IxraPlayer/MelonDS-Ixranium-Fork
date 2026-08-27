@@ -1089,24 +1089,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     liveKeyboardPreview->setVisible(false); // gameplay-only; see updateLiveKeyboardPreviewVisibility
     updateLiveKeyboardPreviewVisibility();
 
-#ifdef Q_OS_WIN
-    // Qt::Tool is supposed to keep this out of the taskbar/alt-tab on its
-    // own, but on Windows the native HWND is sometimes created (or later
-    // touched by the window manager) with WS_EX_APPWINDOW still set,
-    // which makes it show up as its own separate taskbar entry even
-    // though it's flagged as a tool window. Force the exstyle by hand
-    // once the native window exists so it always stays merged under
-    // MainWindow instead of getting its own icon.
-    //
-    // WS_EX_TOOLWINDOW alone isn't actually enough to guarantee this: an
-    // *unowned* tool window (GWLP_HWNDPARENT unset/wrong) can still pick
-    // up its own taskbar button on Windows 11. Qt normally wires this up
-    // via the QWidget parent given to the constructor, but that link can
-    // get lost - e.g. across a fullscreen HWND swap - so set the real
-    // Win32 owner explicitly too, every time visibility flips on, instead
-    // of trusting it was preserved.
-    applyLiveKeyboardPreviewToolStyle();
-#elif defined(Q_OS_LINUX)
+#if defined(Q_OS_LINUX)
     // Same idea on X11: Qt::Tool usually keeps this out of the taskbar,
     // but some window managers only reliably honor it via the explicit
     // EWMH _NET_WM_STATE_SKIP_TASKBAR/SKIP_PAGER hints. Set those by hand
