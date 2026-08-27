@@ -108,25 +108,17 @@ protected:
 
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
-    void positionLiveKeyboardPreview();
+    // Refreshes the live in-game keyboard-preview bitmap (grabbed offscreen
+    // from liveKeyboardPreview, which is never shown as a real window - see
+    // ScreenPanel::setKbPreviewImage) and hands it to `panel` to draw as
+    // part of its own paint/GL pass. Replaces the old approach of a
+    // separate top-level widget positioned/raised over the panel, which is
+    // what was getting its own taskbar entry and stealing focus from the
+    // game - see git history on positionLiveKeyboardPreview/
+    // removeLiveKeyboardPreviewFromTaskbar for that entire abandoned approach.
+    void refreshLiveKeyboardPreviewImage();
     void updateLiveKeyboardPreviewVisibility();
     void refreshKeyboardPreviews();
-#ifdef Q_OS_WIN
-    // Tells the shell directly (via ITaskbarList::DeleteTab) that
-    // liveKeyboardPreview's HWND should never get its own taskbar button,
-    // instead of relying on Explorer inferring that from window styles.
-    void removeLiveKeyboardPreviewFromTaskbar();
-    // Forces WS_EX_NOACTIVATE onto the live HWND and does the show/hide +
-    // z-order change ourselves via SetWindowPos(SWP_NOACTIVATE)/ShowWindow
-    // instead of QWidget::setVisible()+raise(). Qt's Tool+WindowStaysOnTopHint
-    // +WindowDoesNotAcceptFocus combo is *supposed* to map to WS_EX_NOACTIVATE
-    // already, but on some Windows/Qt combos that bit gets dropped (or
-    // re-lost on later internal Qt calls), which is what lets this window
-    // steal activation/z-order from the game panel - reading to the user as
-    // the preview "coming to front" and the game "going to the back" of a tab
-    // group, needing an extra click on the game to refocus it.
-    void setLiveKeyboardPreviewNativeVisible(bool visible);
-#endif
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
@@ -293,6 +285,10 @@ public:
     // separate widget file - it's just a handful of buttons on a dimmed
     // background.
     QWidget* pauseMenuOverlay = nullptr;
+    // Offscreen only - never shown as a real window. Its paintEvent output
+    // is grabbed into a QImage (refreshLiveKeyboardPreviewImage) and handed
+    // to `panel` to draw as part of its own frame; see the comment above
+    // ScreenPanel::setKbPreviewImage in Screen.h for why.
     class KeyboardPreviewWidget* liveKeyboardPreview = nullptr;
     // The pause menu's own preview widget (separate instance from
     // liveKeyboardPreview, only alive while pauseMenuOverlay is up) - kept

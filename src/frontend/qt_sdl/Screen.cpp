@@ -772,6 +772,19 @@ void ScreenPanel::osdDeleteItem(OSDItem* item)
 {
 }
 
+void ScreenPanel::setKbPreviewImage(const QImage& img)
+{
+    osdMutex.lock();
+    kbPreviewImage = img;
+    kbPreviewDirty = true;
+    osdMutex.unlock();
+}
+
+void ScreenPanel::setKbPreviewVisible(bool visible)
+{
+    kbPreviewVisible_ = visible;
+}
+
 void ScreenPanel::osdSetEnabled(bool enabled)
 {
     osdMutex.lock();
@@ -1040,6 +1053,17 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         osdMutex.unlock();
     }
+
+    if (kbPreviewVisible_)
+    {
+        osdMutex.lock();
+        if (!kbPreviewImage.isNull())
+        {
+            int kw = kbPreviewImage.width(), kh = kbPreviewImage.height();
+            painter.drawImage(width() - kw - kOSDMargin, height() - kh - kOSDMargin, kbPreviewImage);
+        }
+        osdMutex.unlock();
+    }
 }
 
 
@@ -1224,6 +1248,12 @@ void ScreenPanelGL::deinitOpenGL()
     }
     osdTextures.clear();
 
+    if (kbPreviewTexture)
+    {
+        glDeleteTextures(1, &kbPreviewTexture);
+        kbPreviewTexture = 0;
+    }
+
     glDeleteVertexArrays(1, &osdVertexArray);
     glDeleteBuffers(1, &osdVertexBuffer);
 
@@ -1278,6 +1308,25 @@ void ScreenPanelGL::osdDeleteItem(OSDItem* item)
     }
 
     ScreenPanel::osdDeleteItem(item);
+}
+
+void ScreenPanelGL::kbPreviewTextureUpload()
+{
+    if (kbPreviewTexture)
+    {
+        glDeleteTextures(1, &kbPreviewTexture);
+        kbPreviewTexture = 0;
+    }
+    if (kbPreviewImage.isNull()) return;
+
+    glGenTextures(1, &kbPreviewTexture);
+    glBindTexture(GL_TEXTURE_2D, kbPreviewTexture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kbPreviewImage.width(), kbPreviewImage.height(), 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, kbPreviewImage.bits());
 }
 
 void ScreenPanelGL::drawScreen()
@@ -1483,6 +1532,45 @@ void ScreenPanelGL::drawScreen()
             glDisable(GL_BLEND);
             glUseProgram(0);
         }
+        osdMutex.unlock();
+    }
+
+    if (kbPreviewVisible_)
+    {
+        osdMutex.lock();
+
+        if (kbPreviewDirty)
+        {
+            kbPreviewTextureUpload();
+            kbPreviewDirty = false;
+        }
+
+        if (kbPreviewTexture && !kbPreviewImage.isNull())
+        {
+            glUseProgram(osdShader);
+
+            glUniform2f(osdScreenSizeULoc, w, h);
+            glUniform1f(osdScaleFactorULoc, factor);
+            glUniform1f(osdTexScaleULoc, 1.0);
+
+            glBindBuffer(GL_ARRAY_BUFFER, osdVertexBuffer);
+            glBindVertexArray(osdVertexArray);
+
+            glActiveTexture(GL_TEXTURE0);
+
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            int kw = kbPreviewImage.width(), kh = kbPreviewImage.height();
+            glBindTexture(GL_TEXTURE_2D, kbPreviewTexture);
+            glUniform2i(osdPosULoc, w - kw - kOSDMargin, h - kh - kOSDMargin);
+            glUniform2i(osdSizeULoc, kw, kh);
+            glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+            glDisable(GL_BLEND);
+            glUseProgram(0);
+        }
+
         osdMutex.unlock();
     }
 

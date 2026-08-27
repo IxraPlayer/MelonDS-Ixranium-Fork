@@ -78,6 +78,22 @@ public:
     void setDebugOverlayVisible(bool visible);
     bool debugOverlayVisible() const;
 
+    // Live in-game keyboard-mapping preview, rendered through this exact
+    // same OSD bitmap pipeline as the debug overlay above (bottom-right
+    // corner) instead of as a separate top-level widget. The previous
+    // top-level-window approach kept getting its own taskbar button and
+    // stealing activation/z-order from this panel on Windows, no matter how
+    // many native-window workarounds were layered on - because it *was* a
+    // second real window. Drawing it as part of this panel's own paint/GL
+    // pass removes the second window entirely, so there is nothing left
+    // that Explorer/DWM could ever treat as a separate app. The bitmap
+    // itself is produced elsewhere (MainWindow grabs an offscreen,
+    // never-shown KeyboardPreviewWidget into a QImage) and just handed to
+    // us here to composite, the same way an OSDItem's bitmap is produced
+    // by text rendering and then composited generically.
+    void setKbPreviewImage(const QImage& img);
+    void setKbPreviewVisible(bool visible);
+
     virtual void drawScreen() {}// = 0;
 
 private slots:
@@ -172,6 +188,15 @@ protected:
     // between them.
     std::deque<OSDItem> debugOverlayItems;
     qint64 debugOverlayLastUpdate;
+
+    // See setKbPreviewImage()/setKbPreviewVisible() above. kbPreviewDirty
+    // tracks whether the GL subclass needs to re-upload the texture (the
+    // native/QPainter subclass just draws kbPreviewImage directly every
+    // frame and doesn't need it, hence the no-op base virtual).
+    QImage kbPreviewImage;
+    std::atomic<bool> kbPreviewVisible_ { false };
+    bool kbPreviewDirty = true;
+    virtual void kbPreviewTextureUpload() {}
 
     void loadConfig();
 
@@ -304,6 +329,9 @@ private:
 
     void osdRenderItem(OSDItem* item) override;
     void osdDeleteItem(OSDItem* item) override;
+
+    void kbPreviewTextureUpload() override;
+    GLuint kbPreviewTexture = 0;
 };
 
 #endif // SCREEN_H
