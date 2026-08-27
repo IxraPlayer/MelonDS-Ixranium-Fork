@@ -28,6 +28,8 @@ namespace melonDS
 {
 
 #include "OpenGL_shaders/3DClearVS.h"
+#include "OpenGL_shaders/3DFXAAVS.h"
+#include "OpenGL_shaders/3DFXAAFS.h"
 #include "OpenGL_shaders/3DClearFS.h"
 #include "OpenGL_shaders/3DClearBitmapVS.h"
 #include "OpenGL_shaders/3DClearBitmapFS.h"
@@ -194,6 +196,17 @@ bool GLRenderer3D::Init()
     uni_id = glGetUniformLocation(FinalPassFogShader, "AttrBuffer");
     glUniform1i(uni_id, 1);
 
+    if (!OpenGL::CompileVertexFragmentProgram(FXAAShader,
+            k3DFXAAVS, k3DFXAAFS,
+            "FXAAShader",
+            {{"vPosition", 0}},
+            {{"oColor", 0}}))
+        return false;
+
+    glUseProgram(FXAAShader);
+    uni_id = glGetUniformLocation(FXAAShader, "ColorBuffer");
+    glUniform1i(uni_id, 0);
+
 
     memset(&ShaderConfig, 0, sizeof(ShaderConfig));
 
@@ -278,6 +291,12 @@ bool GLRenderer3D::Init()
     glGenTextures(1, &AttrBufferTex);
     SetupDefaultTexParams(AttrBufferTex);
 
+    // FXAA output target - separate texture/FBO since the pass reads
+    // ColorBufferTex and can't also write to it in the same draw call.
+    glGenFramebuffers(1, &AAFramebuffer);
+    glGenTextures(1, &AAColorTex);
+    SetupDefaultTexParams(AAColorTex);
+
     Parent.OutputTex3D = ColorBufferTex;
 
     glEnable(GL_BLEND);
@@ -298,6 +317,8 @@ GLRenderer3D::~GLRenderer3D()
     glDeleteTextures(1, &ColorBufferTex);
     glDeleteTextures(1, &DepthBufferTex);
     glDeleteTextures(1, &AttrBufferTex);
+    glDeleteFramebuffers(1, &AAFramebuffer);
+    glDeleteTextures(1, &AAColorTex);
 
     glDeleteVertexArrays(1, &VertexArrayID);
     glDeleteBuffers(1, &VertexBufferID);
@@ -361,6 +382,13 @@ void GLRenderer3D::SetRenderSettings(int scale, bool betterpolygons) noexcept
     glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, DepthBufferTex, 0);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, AttrBufferTex, 0);
     glDrawBuffers(2, fbassign);
+
+    // resize/rebind the FXAA output target to match
+    glBindTexture(GL_TEXTURE_2D, AAColorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ScreenW, ScreenH, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, AAFramebuffer);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, AAColorTex, 0);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -1480,6 +1508,38 @@ void GLRenderer3D::RenderFrame()
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
 
         RenderSceneChunk(0, 192);
+    }
+
+    // FXAA post-pass: only meaningful at native (1x) resolution, since
+    // Optimized Graphics/ScaleFactor>1 already antialiases via
+    // supersampling and running both would be redundant extra cost.
+    if (ScaleFactor <= 1)
+    {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, AAFramebuffer);
+        glViewport(0, 0, ScreenW, ScreenH);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+
+        glUseProgram(FXAAShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, ColorBufferTex);
+
+        glBindBuffer(GL_ARRAY_BUFFER, ClearVertexBufferID);
+        glBindVertexArray(ClearVertexArrayID);
+        glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_STENCIL_TEST);
+
+        Parent.OutputTex3D = AAColorTex;
+    }
+    else
+    {
+        Parent.OutputTex3D = ColorBufferTex;
     }
 }
 
