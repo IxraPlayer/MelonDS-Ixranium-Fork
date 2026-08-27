@@ -1047,18 +1047,23 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // In-game keyboard mapping preview (bottom-right corner), independent of
     // the pause menu's own copy - toggled from View > Show keyboard preview.
     //
-    // This is a genuine top-level window, not a child of the central
-    // widget: a plain QWidget overlapping the GL-rendered screen panel
-    // forces Qt to recomposite the WHOLE panel (the actual game frame,
-    // not just this little corner) on every single repaint of this
-    // widget - i.e. every key press/release during gameplay was causing
-    // a full-screen recomposite, which is what was actually behind the
-    // stutter/desync. A separate top-level surface is composited by the
+    // A genuine top-level window rather than a child of the central widget:
+    // a plain QWidget overlapping the GL-rendered screen panel forces Qt to
+    // recomposite the WHOLE panel (the actual game frame) on every single
+    // repaint of this widget - every key press/release during gameplay was
+    // causing a full-screen recomposite, which is what was actually behind
+    // the stutter/desync. A separate top-level surface is composited by the
     // OS independently and never touches the game's own paint cycle.
-    // Qt::Tool + WindowDoesNotAcceptFocus keep it out of the taskbar/
-    // alt-tab and unable to steal keyboard focus, so it still reads as
-    // part of the main window rather than "a separate window" to the user.
-    liveKeyboardPreview = new KeyboardPreviewWidget(nullptr);
+    //
+    // Passing `this` as the parent (rather than nullptr) still keeps it a
+    // real top-level window for that reason, but also makes MainWindow its
+    // OS-level *owner*: it stacks above MainWindow specifically (follows
+    // it, minimizes/restores with it), instead of floating as a fully
+    // independent, ownerless window that can end up behind the game and
+    // reads as "a separate app window" to the user. Qt::Tool +
+    // WindowDoesNotAcceptFocus additionally keep it out of the taskbar/
+    // alt-tab and unable to steal keyboard focus.
+    liveKeyboardPreview = new KeyboardPreviewWidget(this);
     liveKeyboardPreview->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint |
                                          Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     liveKeyboardPreview->setAttribute(Qt::WA_TranslucentBackground);
