@@ -3059,6 +3059,23 @@ void MainWindow::onChangeSharpUpscale(bool checked)
 {
     windowCfg.SetBool("SharpUpscale", checked);
     panel->setSharpUpscale(checked);
+
+    // Sharp upscale does its own edge-directed filtering in the shader, so
+    // plain bilinear "Screen filtering" is redundant on top of it (and just
+    // adds extra blur). Keep the related video settings consistent with
+    // whichever mode was just picked instead of leaving them in a
+    // conflicting state the user has to notice and fix by hand.
+    if (checked)
+    {
+        actScreenFiltering->setChecked(false);
+        windowCfg.SetBool("ScreenFilter", false);
+        panel->setFilter(false);
+    }
+
+    QMessageBox::information(
+        this,
+        tr("Restart required"),
+        tr("Video settings have been updated. Please restart melonDS for the changes to take full effect."));
 }
 
 void MainWindow::onChangeShowOSD(bool checked)

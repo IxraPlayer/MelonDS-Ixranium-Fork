@@ -139,6 +139,27 @@ vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
     return mix(c, blendTarget, blendStrength);
 }
 
+// Unsharp-mask pass applied after the edge-directed blend above. The
+// rotated-grid supersampling in xbrEdgeUpscale softens the image quite a
+// bit (that's the whole point - smooth diagonals) but as a side effect the
+// result looks noticeably blurrier than the raw source. This restores
+// perceived detail/contrast without re-introducing jaggies: it only pushes
+// the *already-computed* pixel away from its local (low-pass) average, it
+// never samples new high-frequency data, so it can't undo the anti-aliasing
+// itself.
+vec3 sharpenPass(sampler2DArray tex, vec3 uv, vec3 center)
+{
+    vec3 n = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
+    vec3 s = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
+    vec3 w = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
+    vec3 e = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
+    vec3 blur = (n + s + w + e) * 0.25;
+
+    const float kSharpAmount = 0.55;
+    vec3 sharpened = center + (center - blur) * kSharpAmount;
+    return clamp(sharpened, 0.0, 1.0);
+}
+
 vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
 {
     vec2 texSize = vec2(textureSize(tex, 0).xy);
@@ -163,7 +184,10 @@ void main()
 {
     vec3 rgb;
     if (uSharpUpscale != 0)
+    {
         rgb = xbrEdgeUpscale(ScreenTex, fTexcoord);
+        rgb = sharpenPass(ScreenTex, fTexcoord, rgb);
+    }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
 
