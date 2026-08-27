@@ -1403,7 +1403,12 @@ void ScreenPanelGL::drawScreen()
 
         screenSettingsLock.lock();
 
-        GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
+        // When the edge-directed sharp upscale is active it needs crisp,
+        // un-blurred source texels to detect edges from - bilinear
+        // filtering here would pre-blur the source and defeat the whole
+        // point of the shader, so force nearest in that case regardless
+        // of the user's separate bilinear toggle.
+        GLint filter = (this->filter && !sharpUpscale) ? GL_LINEAR : GL_NEAREST;
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, filter);
 

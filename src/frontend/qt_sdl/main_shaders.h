@@ -133,9 +133,19 @@ vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
     // still visible 2 texels out, noise/dither is not - this suppresses
     // blending on dithered/noisy source material.
     float confidence = smoothstep(0.0, 0.25, farConfirm);
-    float blendStrength = smoothstep(0.015, 0.09, edgeMag) * cornerDist * mix(0.35, 0.75, confidence);
+    // Wider, more sensitive ramp + higher ceiling than before - the old
+    // (0.35 .. 0.75) range left most diagonals barely touched. xBRZ-style
+    // corner rounding wants the corner texel to fully commit to the blend
+    // once an edge is confidently detected, otherwise the "2x" look never
+    // materialises and it just looks like a faint blur.
+    float blendStrength = smoothstep(0.008, 0.05, edgeMag) * cornerDist * mix(0.55, 1.0, confidence);
 
-    vec3 blendTarget = (d1 < d2) ? mix(side1, side2, 0.5) : diagB;
+    // True xBRZ-style corner rounding: blend the diagonal corner texel
+    // with the average of both its orthogonal neighbours (not just one
+    // side), which is what actually produces the smooth stair-stepped
+    // diagonal edge instead of a soft diffuse blend.
+    vec3 sideAvg = mix(side1, side2, 0.5);
+    vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
     return mix(c, blendTarget, blendStrength);
 }
 
@@ -149,14 +159,26 @@ vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
 // itself.
 vec3 sharpenPass(sampler2DArray tex, vec3 uv, vec3 center)
 {
-    vec3 n = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
-    vec3 s = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
-    vec3 w = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
-    vec3 e = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
-    vec3 blur = (n + s + w + e) * 0.25;
+    vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
+    vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
+    vec3 w  = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
+    vec3 e  = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
+    vec3 nw = textureOffset(tex, uv, ivec2(-1, -1)).rgb;
+    vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
+    vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
+    vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
+    // 8-tap (3x3 minus centre) low-pass instead of the old 4-tap cross -
+    // a wider, rounder blur kernel means the unsharp mask pulls out real
+    // texture detail evenly in every direction instead of only along the
+    // axes, which is what was making textures look "flat" before.
+    vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
 
-    const float kSharpAmount = 0.55;
-    vec3 sharpened = center + (center - blur) * kSharpAmount;
+    const float kSharpAmount = 0.9;
+    vec3 diff = center - blur;
+    // Clamp the push so we sharpen real edges hard without blowing out
+    // into visible halos/ringing on high-contrast boundaries.
+    diff = clamp(diff, -0.35, 0.35);
+    vec3 sharpened = center + diff * kSharpAmount;
     return clamp(sharpened, 0.0, 1.0);
 }
 
