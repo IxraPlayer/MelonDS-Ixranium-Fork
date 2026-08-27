@@ -60,6 +60,7 @@ public:
     virtual ~ScreenPanel();
 
     void setFilter(bool filter);
+    void setSharpUpscale(bool enable) { sharpUpscale = enable; update(); }
 
     void setMouseHide(bool enable, int delay);
 
@@ -121,6 +122,7 @@ protected:
     bool screenSwap;
     int screenSizing;
     bool screenFocused;
+    bool sharpUpscale = false;
     bool integerScaling;
     int screenAspectTop, screenAspectBot;
 

@@ -749,6 +749,10 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actScreenFiltering->setCheckable(true);
             connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
 
+            actSharpUpscale = menu->addAction(tr("Sharp upscale (Beta)"));
+            actSharpUpscale->setCheckable(true);
+            connect(actSharpUpscale, &QAction::triggered, this, &MainWindow::onChangeSharpUpscale);
+
             actShowOSD = menu->addAction(tr("Show OSD"));
             actShowOSD->setCheckable(true);
             connect(actShowOSD, &QAction::triggered, this, &MainWindow::onChangeShowOSD);
@@ -995,6 +999,7 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         }
 
         actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
+        actSharpUpscale->setChecked(windowCfg.GetBool("SharpUpscale"));
         actShowOSD->setChecked(showOSD);
         actShowKeyboardPreview->setChecked(showKeyboardPreview);
 
@@ -3048,6 +3053,12 @@ void MainWindow::onChangeScreenFiltering(bool checked)
 
     //emit screenLayoutChange();
     panel->setFilter(checked);
+}
+
+void MainWindow::onChangeSharpUpscale(bool checked)
+{
+    windowCfg.SetBool("SharpUpscale", checked);
+    panel->setSharpUpscale(checked);
 }
 
 void MainWindow::onChangeShowOSD(bool checked)

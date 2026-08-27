@@ -20,6 +20,7 @@
 
 #include <optional>
 #include <cmath>
+#include <algorithm>
 
 #include <QPaintEvent>
 #include <QPainter>
@@ -135,6 +136,7 @@ void ScreenPanel::loadConfig()
     screenSwap = cfg.GetBool("ScreenSwap");
     screenSizing = cfg.GetInt("ScreenSizing");
     screenFocused = cfg.GetBool("ScreenFocused");
+    sharpUpscale = cfg.GetBool("SharpUpscale");
     integerScaling = cfg.GetBool("IntegerScaling");
     screenAspectTop = cfg.GetInt("ScreenAspectTop");
     screenAspectBot = cfg.GetInt("ScreenAspectBot");
@@ -913,6 +915,51 @@ void ScreenPanel::calcSplashLayout()
 
 
 
+// "Sharp Upscale" (Beta): a small, self-written edge-directed 2x pixel-art
+// upscaler (EPX/Scale2x-style). For every source pixel P with neighbours
+// A(bove) B(elow) C(left) D(right), it looks at which neighbours agree with
+// each other diagonally and only then "extends" that neighbour's colour
+// into the corner - this turns staircase-y diagonal edges into a smoother
+// line without blurring flat-colour areas or losing any colour. Runs on the
+// tiny 256x192 DS framebuffer so the CPU cost is negligible.
+static QImage sharpUpscale2x(const QImage& src)
+{
+    const int w = src.width(), h = src.height();
+    QImage out(w * 2, h * 2, QImage::Format_RGB32);
+
+    auto at = [&](int x, int y) -> QRgb
+    {
+        x = std::clamp(x, 0, w - 1);
+        y = std::clamp(y, 0, h - 1);
+        return reinterpret_cast<const QRgb*>(src.constScanLine(y))[x];
+    };
+
+    for (int y = 0; y < h; y++)
+    {
+        QRgb* dst0 = reinterpret_cast<QRgb*>(out.scanLine(y * 2));
+        QRgb* dst1 = reinterpret_cast<QRgb*>(out.scanLine(y * 2 + 1));
+
+        for (int x = 0; x < w; x++)
+        {
+            QRgb P = at(x, y);
+            QRgb A = at(x, y - 1);
+            QRgb B = at(x, y + 1);
+            QRgb C = at(x - 1, y);
+            QRgb D = at(x + 1, y);
+
+            QRgb E0 = (C == A && C != D && A != B) ? A : P;
+            QRgb E1 = (A == D && A != C && D != B) ? D : P;
+            QRgb E2 = (C == B && C != D && B != A) ? C : P;
+            QRgb E3 = (D == B && D != C && B != A) ? B : P;
+
+            dst0[x * 2] = E0; dst0[x * 2 + 1] = E1;
+            dst1[x * 2] = E2; dst1[x * 2 + 1] = E3;
+        }
+    }
+
+    return out;
+}
+
 ScreenPanelNative::ScreenPanelNative(QWidget* parent) : ScreenPanel(parent)
 {
     hasBuffers = false;
@@ -981,10 +1028,15 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
         QRect screenrc(0, 0, 256, 192);
 
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, sharpUpscale || filter);
+
         for (int i = 0; i < numScreens; i++)
         {
             painter.setTransform(screenTrans[i]);
-            painter.drawImage(screenrc, screen[screenKind[i]]);
+            if (sharpUpscale)
+                painter.drawImage(screenrc, sharpUpscale2x(screen[screenKind[i]]));
+            else
+                painter.drawImage(screenrc, screen[screenKind[i]]);
         }
         emuInstance->renderLock.unlock();
     }

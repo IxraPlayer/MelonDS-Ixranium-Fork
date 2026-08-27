@@ -208,6 +208,7 @@ private slots:
     void onChangeIntegerScaling(bool checked);
     void onOpenNewWindow();
     void onChangeScreenFiltering(bool checked);
+    void onChangeSharpUpscale(bool checked);
     void onChangeShowOSD(bool checked);
     void onChangeShowKeyboardPreview(bool checked);
     void onChangeLimitFramerate(bool checked);
@@ -371,6 +372,7 @@ public:
     QAction** actScreenAspectBot;
     QAction* actNewWindow;
     QAction* actScreenFiltering;
+    QAction* actSharpUpscale;
     QAction* actShowOSD;
     QAction* actShowKeyboardPreview;
     QAction* actLimitFramerate;

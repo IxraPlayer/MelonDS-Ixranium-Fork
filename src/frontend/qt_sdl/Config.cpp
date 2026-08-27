@@ -218,6 +218,7 @@ LegacyEntry LegacyFile[] =
     {"ScreenAspectBot",0, "Window0.ScreenAspectBot", true},
 
     {"ScreenFilter",        1, "Screen.Filter", false},
+    {"SharpUpscale",        0, "Screen.SharpUpscale", false},
     {"ScreenUseGL",         1, "Screen.UseGL", false},
     {"ScreenVSync",         1, "Screen.VSync", false},
     {"ScreenVSyncInterval", 0, "Screen.VSyncInterval", false},
