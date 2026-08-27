@@ -23,6 +23,8 @@
 #include <cmath>
 #include <algorithm>
 #include <QSet>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 
 #include "NDS_Header.h"
 #include <QMouseEvent>
@@ -38,22 +40,10 @@
 #include <QDialogButtonBox>
 #include <QComboBox>
 #include "InputConfig/ControlSchemeStore.h"
-#include <QVBoxLayout>
 #include <QLabel>
 
-// MIME type used to carry the dragged tile's ROM path during a
-// press-and-drag reorder within the library grid.
 static const char* kGameDragMime = "application/x-melonds-game-path";
 
-// Scale2x (AdvMAME2x): doubles a pixel-art image's resolution while
-// keeping edges crisp - unlike a plain smooth/bilinear upscale (which
-// blurs everything) or nearest-neighbor (which just makes each pixel a
-// bigger flat square with stair-stepped diagonals), this looks at each
-// pixel's 4 direct neighbors and, where there's a clear diagonal
-// transition, extends it into the new pixels instead of the neighbors
-// simply being duplicated. That's what actually "connects" a diagonal
-// line into a smooth diagonal edge rather than a staircase, which is
-// exactly what pixel-art icons need when blown up several times over.
 static QImage scale2x(const QImage& srcIn)
 {
     QImage src = srcIn.convertToFormat(QImage::Format_ARGB32);
@@ -96,12 +86,6 @@ static QImage scale2x(const QImage& srcIn)
     return dst;
 }
 
-// Rotates a color's hue by the given number of degrees, leaving near-gray
-// (low-saturation) colors like white/black untouched so text and glass
-// panels don't pick up a tint. This is how the single set of hand-tuned
-// turquoise/blue accent colors below gets re-painted as red/green/purple
-// for the other Ixranium color choices, without needing four separate
-// copies of every gradient.
 static QColor hueShifted(const QColor& c, int deltaDeg)
 {
     if (deltaDeg == 0)
@@ -110,7 +94,7 @@ static QColor hueShifted(const QColor& c, int deltaDeg)
     int h, s, l, a;
     c.getHsl(&h, &s, &l, &a);
     if (h < 0 || s == 0)
-        return c; // achromatic; nothing to rotate
+        return c; 
 
     h = ((h + deltaDeg) % 360 + 360) % 360;
 
@@ -119,27 +103,8 @@ static QColor hueShifted(const QColor& c, int deltaDeg)
     return out;
 }
 
-// Custom-painted tile: fully bypasses QToolButton's own style-based
-// painting (which kept fighting the app's global .qss for the
-// background) in favor of drawing everything ourselves. This is what
-// makes a real ~50% translucent glass panel and the animated glow
-// border possible - QSS alone can't animate, and letting QStyle draw
-// its own panel on top of a custom background is what caused the
-// "transparent tile showing the animated backdrop" bug earlier.
-// Extra room reserved on every side of each tile's real (grid-managed)
-// footprint so the hover "grow" effect below can scale the visible card
-// up without ever changing the widget's actual size/position. Growing
-// the *real* geometry used to be how this worked, but a QGridLayout can
-// re-assert/invalidate cell geometry at unpredictable times (scroll area
-// resize, any add/remove, even some internal Qt bookkeeping), which
-// snapped the grown tile back and - because relayout() rebuilds the
-// whole grid from `paths` - could visibly reshuffle/blank out other
-// cards while a card was mid-hover. Keeping the real footprint constant
-// and only scaling what's *painted*, inside this reserved margin,
-// makes that entire class of bug impossible: the layout never sees a
-// size change, so it never has a reason to move or drop anything.
 static const int kCardVisualSize = 140;
-static const int kCardHoverPad = 8; // >= half of (140 * 0.08) growth, rounded up
+static const int kCardHoverPad = 8;
 static const int kCardFootprint = kCardVisualSize + kCardHoverPad * 2;
 
 class GameCardButton : public QToolButton
@@ -152,11 +117,6 @@ public:
         liveInstances().insert(this);
         ensureSharedTimer();
 
-        // Hover "grow" effect: purely a paint-time transform around the
-        // card's own center, drawn inside the padding reserved above.
-        // The widget's real geometry (and therefore the grid layout)
-        // never changes, so neighboring tiles can't be pushed, hidden,
-        // or reflowed by a hover.
         scaleAnim = new QVariantAnimation(this);
         scaleAnim->setDuration(120);
         scaleAnim->setEasingCurve(QEasingCurve::OutCubic);
@@ -172,26 +132,9 @@ public:
         liveInstances().remove(this);
     }
 
-    // Pre-scales the ROM icon once (Scale2x x2 + final downscale to the
-    // 48px display size) and caches the result, instead of redoing that
-    // pixel-by-pixel upscale from scratch in every single paintEvent.
-    // Every tile used to re-run scale2x() twice on its icon on every one
-    // of its own repaints (every 120ms, plus every hover/press) - with a
-    // full library open that's what was actually making the screen crawl,
-    // far more than the gradient/glow painting ever was.
-    void setGameIcon(const QImage& iconImg)
+    // Doğrudan hazırlanmış Pixmap'i alır, ağır scale işlemlerini tamamen es geçer
+    void setGameIconPixmap(const QPixmap& pix)
     {
-        if (iconImg.isNull())
-        {
-            cachedIcon = QPixmap();
-            update();
-            return;
-        }
-        const int iconSize = 48;
-        QImage scaled = scale2x(scale2x(iconImg)); // 4x, matches native 32x32 source
-        QPixmap pix = QPixmap::fromImage(scaled);
-        if (pix.width() > iconSize || pix.height() > iconSize)
-            pix = pix.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         cachedIcon = pix;
         update();
     }
@@ -199,7 +142,7 @@ public:
 protected:
     void enterEvent(QEnterEvent*) override
     {
-        raise(); // draw over neighboring cards instead of being clipped/overlapped by them
+        raise(); 
         scaleAnim->stop();
         scaleAnim->setStartValue(hoverScale);
         scaleAnim->setEndValue(1.08);
@@ -218,10 +161,7 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        // Scale everything below around the widget's center. Because the
-        // real widget is kCardHoverPad larger on every side than the
-        // visual card, this can grow right up to ~1.08x without ever
-        // touching (let alone clipping against) a neighboring tile.
+        
         painter.translate(rect().center());
         painter.scale(hoverScale, hoverScale);
         painter.translate(-rect().center());
@@ -232,30 +172,19 @@ protected:
         QPainterPath path;
         path.addRoundedRect(r, radius, radius);
 
-        // ~25% translucent (darker than before, and clearly darker than
-        // the background behind it) glass panel, slightly brighter on
-        // hover/press.
         QColor bg = isDown()      ? QColor(22, 25, 31, 150)
                   : underMouse()  ? QColor(19, 22, 28, 145)
                                   : QColor(10, 12, 16, 128);
         painter.fillPath(path, bg);
 
-        // Qt/QSS has no real backdrop-blur (can't blur what's actually
-        // behind the widget without re-rendering it every frame), so this
-        // is a practical stand-in: a soft diagonal white sheen that reads
-        // as frosted glass rather than a flat translucent color.
         QLinearGradient sheen(r.topLeft(), r.bottomRight());
         sheen.setColorAt(0.0, QColor(255, 255, 255, 22));
         sheen.setColorAt(0.5, QColor(255, 255, 255, 5));
         sheen.setColorAt(1.0, QColor(255, 255, 255, 0));
         painter.fillPath(path, sheen);
 
-        // Thin turquoise base border, always visible.
         painter.strokePath(path, QPen(hueShifted(QColor(72, 226, 226, 100), LibraryScreen::AccentHueShift), 1.1));
 
-        // Bright white glow that slowly travels around the border, via a
-        // conical gradient whose angle advances over time - cheap and
-        // smooth compared to animating a path sub-segment by hand.
         double angleDeg = std::fmod(glowClock.elapsed() / 45.0, 360.0);
         QConicalGradient glow(r.center(), angleDeg);
         glow.setColorAt(0.00, QColor(255, 255, 255, 240));
@@ -273,35 +202,18 @@ protected:
             f.setPixelSize(34);
             f.setWeight(QFont::Light);
             painter.setFont(f);
-            // Base color kept at the same ~180deg turquoise hue as every
-            // other accent element in this file (border, glow, blobs) -
-            // it used to be a fixed violet (hue ~255deg), so the same
-            // AccentHueShift that correctly lines up the turquoise-based
-            // elements with each theme's accent was rotating this one
-            // from a different starting point and landing it on a
-            // visibly different color for every theme.
             painter.setPen(underMouse() ? hueShifted(QColor(123, 255, 255), LibraryScreen::AccentHueShift) : QColor(90, 95, 110));
             painter.drawText(r, Qt::AlignCenter, "+");
             return;
         }
 
-        // Icon fills most of the space between the tile's top edge and the
-        // title text at the bottom, rather than a small fixed 64px glyph
-        // sitting near the top - reads much better on the card layout.
-        // Icon fills most of the space between the tile's top edge and the
-        // title text at the bottom, without crowding into the text itself.
-        const int iconSize = 48;
         if (!cachedIcon.isNull())
         {
-            // Already scaled once in setGameIcon() - just draw it.
             const QPixmap& pix = cachedIcon;
             QRectF iconArea(r.left(), r.top() + 12, r.width(), (r.bottom() - 32) - (r.top() + 12));
             qreal ix = iconArea.center().x() - pix.width() / 2.0;
             qreal iy = iconArea.center().y() - pix.height() / 2.0;
 
-            // Slightly rounded corners on the icon artwork itself, not just
-            // the tile outline - clip the pixmap to a rounded rect before
-            // drawing rather than drawing it square.
             QPainterPath iconClip;
             iconClip.addRoundedRect(QRectF(ix, iy, pix.width(), pix.height()), 15, 15);
             painter.save();
@@ -322,12 +234,6 @@ protected:
     }
 
 private:
-    // Every tile used to own its own 120ms QTimer purely to animate the
-    // slow ambient glow border. With a large library that was N independent
-    // timers/repaints firing out of sync with each other; a single shared
-    // timer that nudges every live tile at once is lighter-weight and,
-    // combined with the visibility check below, skips repainting tiles
-    // that are currently scrolled out of view entirely.
     static QSet<GameCardButton*>& liveInstances()
     {
         static QSet<GameCardButton*> instances;
@@ -342,15 +248,6 @@ private:
         timer = new QTimer(qApp);
         QObject::connect(timer, &QTimer::timeout, qApp, []()
         {
-            // Only the card currently under the mouse (or being pressed)
-            // needs its glow to keep moving - that's the whole point of the
-            // effect, drawing attention to what you're pointing at. Ticking
-            // every idle tile in the whole library too was the real cost:
-            // an antialiased gradient repaint for every single card, N times
-            // a second, regardless of whether anyone was even looking at it.
-            // Idle tiles just keep whatever glow frame they last painted
-            // (frozen, not moving) and only repaint again on a real Qt event
-            // (scroll, resize, hover entering/leaving) - which is free.
             for (GameCardButton* w : liveInstances())
             {
                 if ((w->underMouse() || w->isDown()) &&
@@ -374,27 +271,8 @@ using namespace melonDS;
 
 int LibraryScreen::AccentHueShift = 0;
 
-// Maps a saved "UIQSSTheme" name to the hue rotation (in degrees) that
-// turns the built-in turquoise accent colors (base hue ~180 deg) into the
-// matching Ixranium theme color. Deltas are measured directly from that
-// turquoise base to each theme's actual accent hue, as sampled from its
-// .qss (red #fe573d ~8 deg, green #3dfe77 ~138 deg, purple #d73dfe ~288
-// deg, blue #3d5afe ~231 deg). The old deltas were measured from the blue
-// accent instead of from the library's own turquoise base, which is why
-// blue theme's library screen stayed turquoise instead of turning blue,
-// and why red/green/purple all landed on visibly different hues than
-// their settings menus.
 void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
 {
-    // Base accent colors across the app sit at hue 180 (turquoise/cyan).
-    // These deltas are exact rotations from that 180 baseline to each
-    // theme's true target hue, so every themed element (cards, glow
-    // lines, background blobs) lands on the same consistent color
-    // instead of drifting into a neighboring hue:
-    //   red    -> 180 + 180 = 360/0   (pure red)
-    //   green  -> 180 + 300 = 480%360 = 120 (pure green)
-    //   blue   -> 180 +  60 = 240     (pure blue)
-    //   purple -> 180 + 100 = 280     (violet/purple)
     if (qssThemeName == "ixranium_red")
         AccentHueShift = 180;
     else if (qssThemeName == "ixranium_green")
@@ -404,7 +282,7 @@ void LibraryScreen::ApplyAccentTheme(const QString& qssThemeName)
     else if (qssThemeName == "ixranium_blue")
         AccentHueShift = 60;
     else
-        AccentHueShift = 0; // dark_glass, neo_modern, or unset - keep turquoise default
+        AccentHueShift = 0; 
 }
 
 LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgHue(0.58)
@@ -414,9 +292,6 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     loadConsoleOverrides();
     loadSchemeOverrides();
 
-    // Slow animated wave between turquoise and near-black, redrawn in
-    // paintEvent(). ~20fps is plenty for something this gradual - no
-    // point burning cycles animating a background that moves this slowly.
     bgAnimTimer = new QTimer(this);
     connect(bgAnimTimer, &QTimer::timeout, this, &LibraryScreen::onBgTick);
     bgAnimTimer->start(50);
@@ -427,20 +302,12 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
-    // Let the animated background paint straight through instead of
-    // sitting behind a separately-colored opaque rectangle - that's what
-    // was reading as a hard "frame" around the wave instead of a smooth
-    // blend into it.
     scroll->setStyleSheet("QScrollArea { background: transparent; }");
     scroll->viewport()->setStyleSheet("background: transparent;");
 
     auto* inner = new QWidget();
     inner->setStyleSheet("background: transparent;");
     grid = new QGridLayout(inner);
-    // Real widget footprint is kCardFootprint (140 visual + padding on
-    // each side reserved for the hover-grow paint effect - see
-    // GameCardButton above), so the raw grid spacing is trimmed by that
-    // same padding to keep the *visual* gap between cards at 18px.
     grid->setSpacing(18 - 2 * kCardHoverPad);
     grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
@@ -454,9 +321,6 @@ LibraryScreen::LibraryScreen(QWidget* parent) : QWidget(parent), columns(5), bgH
     addTile->setToolButtonStyle(Qt::ToolButtonTextOnly);
     connect(addTile, &QToolButton::clicked, this, &LibraryScreen::addGameRequested);
 
-    // The add-tile is a valid drop target (dropping a game onto it moves
-    // that game to the end of the library) but is never itself draggable,
-    // since it has no "romPath" property set.
     addTile->setAcceptDrops(true);
     addTile->installEventFilter(this);
 
@@ -500,14 +364,7 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
                     drag->setPixmap(tile->icon().pixmap(64, 64));
                 drag->setHotSpot(QPoint(32, 32));
 
-                // Blocks until the user drops or cancels; the actual reorder
-                // happens in the Drop case below, delivered to whichever
-                // tile the cursor was released over.
                 drag->exec(Qt::MoveAction);
-
-                // The button never saw its matching mouseRelease (QDrag
-                // grabbed the mouse for the duration), so without this it's
-                // left thinking it's still held down after the drop.
                 tile->setDown(false);
                 return true;
             }
@@ -536,8 +393,6 @@ bool LibraryScreen::eventFilter(QObject* watched, QEvent* event)
             if (de->mimeData()->hasFormat(kGameDragMime))
             {
                 QString sourcePath = QString::fromUtf8(de->mimeData()->data(kGameDragMime));
-                // Empty when dropped on the "+" tile, which means "move to
-                // the end of the library" rather than swap with a game.
                 QString targetPath = tile->property("romPath").toString();
 
                 if (sourcePath != targetPath && paths.contains(sourcePath))
@@ -581,12 +436,6 @@ void LibraryScreen::rebuildVignetteCache(const QRectF& r, const QPainterPath& pa
 
 void LibraryScreen::showEvent(QShowEvent* event)
 {
-    // Resume the background animation only while the library screen is
-    // actually the visible page - it used to keep ticking (and repainting
-    // the whole window's blob/gradient background 20x/sec) forever in the
-    // background even while a game was running and this screen was
-    // nowhere on screen, which is pure wasted CPU/GPU work and was part
-    // of what made things feel like they were "kasıyor" overall.
     if (bgAnimTimer && !bgAnimTimer->isActive())
         bgAnimTimer->start(50);
     QWidget::showEvent(event);
@@ -601,8 +450,8 @@ void LibraryScreen::hideEvent(QHideEvent* event)
 
 void LibraryScreen::onBgTick()
 {
-    bgPhase += 0.0070; // 2x speed
-    if (bgPhase > 1000.0) bgPhase -= 1000.0; // keep the accumulator from growing unbounded across a long session
+    bgPhase += 0.0070; 
+    if (bgPhase > 1000.0) bgPhase -= 1000.0; 
     update();
 }
 
@@ -611,15 +460,6 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    // The window itself has rounded corners (see QMainWindow in the .qss),
-    // so a flat square fill here left a harsh, mismatched-looking edge at
-    // the bottom corners and a hard color seam against the window behind
-    // it. Round the bottom corners to match the window radius and use a
-    // color close to the app's base background so the seam all but
-    // disappears instead of reading as a separate panel/frame.
-    // Window is fully square now (see MainWindow::paintEvent), so this no
-    // longer rounds the bottom corners - a rounded bottom here would
-    // mismatch the now-square window edge.
     const qreal radius = 0.0;
     QRectF r = rect();
 
@@ -632,34 +472,16 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
     path.arcTo(r.left(), r.bottom() - 2 * radius, 2 * radius, 2 * radius, -90, -90);
     path.closeSubpath();
 
-    // Water-like drift: instead of one fixed diagonal gradient (which
-    // always put the turquoise in the same corner, just wobbling in
-    // place), scatter a few soft turquoise/blue "blobs" that drift around
-    // independently on their own lissajous-style paths, over a dark
-    // turquoise base (no black in the mix) so hue never fully bottoms out
-    // to a flat dark patch.
     QColor deep = hueShifted(QColor(2, 11, 13), AccentHueShift);
     painter.fillPath(path, deep);
 
-    // Watercolor-style blend: more, softer, larger overlapping blobs with
-    // CompositionMode_Plus (additive) so overlapping colors bloom into new
-    // in-between hues instead of just stacking flat circles - this is what
-    // gives the "paint bleeding together" look instead of distinct blobs.
     struct Blob { double speedX, speedY, phaseX, phaseY, rx, ry, radius; QColor color; };
     static const Blob blobs[] = {
-        // The two "bright/deep blue" blobs used to sit at a genuinely
-        // different hue (~225deg) than the other three turquoise blobs
-        // (~180deg). hueShifted() rotates everything by the same delta,
-        // calibrated for the 180deg base, so those two always ended up
-        // off-hue from the rest of the background (and from the theme's
-        // own accent) no matter which theme was active. Re-tuned to the
-        // same 180deg base, same saturation/lightness/alpha, so all five
-        // blobs land on one consistent color per theme.
-        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 83, 83, 95) },     // turquoise
-        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(10, 116, 116, 100) }, // bright turquoise
-        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 74, 74, 80) },    // dark turquoise
-        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(18, 120, 120, 85) },  // turquoise accent
-        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 59, 64, 90) },    // dark turquoise, tighter
+        { 0.55, 0.40, 0.0,  1.7, 0.34, 0.32, 0.62, QColor(0, 83, 83, 95) },     
+        { 0.35, 0.62, 2.1,  0.4, 0.32, 0.36, 0.66, QColor(10, 116, 116, 100) }, 
+        { 0.70, 0.28, 4.2,  3.0, 0.30, 0.28, 0.52, QColor(0, 74, 74, 80) },    
+        { 0.46, 0.50, 1.1,  5.0, 0.36, 0.30, 0.58, QColor(18, 120, 120, 85) },  
+        { 0.60, 0.33, 3.4,  0.9, 0.28, 0.34, 0.48, QColor(0, 59, 64, 90) },    
     };
 
     painter.setCompositionMode(QPainter::CompositionMode_Plus);
@@ -682,12 +504,6 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
 
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
-    // Permanent black vignette: stays constant regardless of the bg
-    // animation, darkening the corners/edges while leaving the center
-    // clear so tiles/text stay readable. This used to be a fresh
-    // QRadialGradient fill over the *entire* window every single 50ms
-    // tick, purely for a layer that never actually changes - now it's
-    // rendered once into a cached pixmap and only rebuilt on resize.
     if (vignetteCache.isNull() || vignetteCacheSize != size())
         rebuildVignetteCache(r, path);
     painter.drawPixmap(0, 0, vignetteCache);
@@ -697,11 +513,6 @@ void LibraryScreen::paintEvent(QPaintEvent* event)
 
 QString LibraryScreen::displayName(const QString& path) const
 {
-    // Prefer the game's own short title (from its icon/title banner) over
-    // a name derived from the filename - filenames are often full romset
-    // names ("4175 - Naruto - Ninja Council 3 (Europe)(En,Fr,Es).nds")
-    // that get harshly truncated on a 140px tile, whereas the banner
-    // title is already the short name shown on a real DS's menu.
     QString romTitle = loadRomShortTitle(path);
     if (!romTitle.isEmpty())
         return romTitle;
@@ -712,8 +523,6 @@ QString LibraryScreen::displayName(const QString& path) const
 
 QString LibraryScreen::loadRomShortTitle(const QString& path)
 {
-    // Archive entries aren't supported for banner extraction yet (same
-    // limitation as loadRomIconImage) - let the caller fall back.
     if (path.contains('|'))
         return QString();
 
@@ -734,9 +543,6 @@ QString LibraryScreen::loadRomShortTitle(const QString& path)
     if (file.read(reinterpret_cast<char*>(titleBuf), sizeof(titleBuf)) != (qint64)sizeof(titleBuf))
         return QString();
 
-    // The banner title is up to 3 lines (game name / subtitle / publisher)
-    // separated by '\n' - the first line is the actual short game name,
-    // which is all we want for a tile label.
     QString full = QString::fromUtf16(reinterpret_cast<const char16_t*>(titleBuf), 128);
     int stop = full.indexOf(u'\n');
     int nul = full.indexOf(QChar(0));
@@ -750,8 +556,6 @@ QString LibraryScreen::loadRomShortTitle(const QString& path)
 
 QImage LibraryScreen::loadRomIconImage(const QString& path)
 {
-    // Archive entries ("archive.zip|game.nds") aren't supported for icon
-    // extraction yet; fall back to text-only tiles for those.
     if (path.contains('|'))
         return QImage();
 
@@ -825,16 +629,32 @@ void LibraryScreen::addGame(const QString& path)
     tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     tile->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    // Enables press-and-drag reordering: the "romPath" property marks this
-    // tile as a valid drag source (see eventFilter), and setAcceptDrops
-    // makes it a valid drop target for other tiles being dragged onto it.
     tile->setProperty("romPath", path);
     tile->setAcceptDrops(true);
     tile->installEventFilter(this);
 
-    QImage iconImg = loadRomIconImage(path);
-    if (!iconImg.isNull())
-        tile->setGameIcon(iconImg);
+    // [Asenkron Optimizasyon]
+    // İkon okuma ve scale2x işlemleri arka plan iş parçacığına devredildi. 
+    // Ana kilitlenmeler ve kasmalar önlendi!
+    QFutureWatcher<QImage>* watcher = new QFutureWatcher<QImage>(tile);
+    connect(watcher, &QFutureWatcher<QImage>::finished, this, [tile, watcher]() {
+        QImage img = watcher->result();
+        if (!img.isNull()) {
+            tile->setGameIconPixmap(QPixmap::fromImage(img));
+        }
+        watcher->deleteLater();
+    });
+    
+    watcher->setFuture(QtConcurrent::run([path]() -> QImage {
+        QImage iconImg = loadRomIconImage(path);
+        if (iconImg.isNull()) return QImage();
+
+        const int iconSize = 48;
+        QImage scaled = scale2x(scale2x(iconImg));
+        if (scaled.width() > iconSize || scaled.height() > iconSize)
+            scaled = scaled.scaled(iconSize, iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return scaled;
+    }));
 
     connect(tile, &QToolButton::clicked, this, [this, path]()
     {
@@ -844,11 +664,6 @@ void LibraryScreen::addGame(const QString& path)
     connect(tile, &QToolButton::customContextMenuRequested, this, [this, tile, path](const QPoint& pos)
     {
         QMenu menu(tile);
-        // Global popup fix (PopupCornerFixStyle) marks every QMenu
-        // translucent so rounded corners don't show as black squares, which
-        // left this one see-through in the middle too since it never had an
-        // opaque background of its own. Give it a solid painted panel so it
-        // reads as matte while keeping the rounded corners.
         menu.setAttribute(Qt::WA_TranslucentBackground, true);
         menu.setStyleSheet(
             "QMenu { background: rgba(24,26,34,255); border: 1px solid rgba(255,255,255,30); "
@@ -859,13 +674,6 @@ void LibraryScreen::addGame(const QString& path)
         QAction* removeAct = menu.addAction("Remove from library");
         QAction* chosen = menu.exec(tile->mapToGlobal(pos));
 
-        // QMenu::exec() grabs the mouse for the duration of the popup, and
-        // Qt doesn't reliably resend enter/leave events to the tile
-        // underneath once it closes - so if the pointer had moved off the
-        // tile while the menu was open, the tile's enterEvent-driven hover
-        // scale animation never got the matching leaveEvent and stayed
-        // "grown" even though the mouse is no longer over it. Explicitly
-        // resync the hover state against where the cursor actually is now.
         if (!tile->underMouse())
         {
             QEvent leave(QEvent::Leave);
@@ -890,10 +698,6 @@ void LibraryScreen::addGame(const QString& path)
     relayout();
 }
 
-// Stored separately from the main melonDS config file (own QSettings
-// group, keyed by ROM path) so this per-game convenience feature doesn't
-// need to touch Config.cpp's schema at all. -1 (absent) means "follow
-// the global Console type setting".
 static const char* kConsoleOverrideSettingsGroup = "GameConsoleOverrides";
 
 void LibraryScreen::loadConsoleOverrides()
@@ -913,7 +717,7 @@ void LibraryScreen::saveConsoleOverrides()
 {
     QSettings settings;
     settings.beginGroup(kConsoleOverrideSettingsGroup);
-    settings.remove(""); // clear the group, then rewrite it in full
+    settings.remove(""); 
     for (auto it = consoleOverrides.constBegin(); it != consoleOverrides.constEnd(); ++it)
         settings.setValue(it.key(), it.value());
     settings.endGroup();
@@ -972,10 +776,6 @@ void LibraryScreen::setControlSchemeOverride(const QString& path, const QString&
     saveSchemeOverrides();
 }
 
-// "Details" popup opened from a game tile's right-click menu. Currently
-// just holds the per-game DS/DSi console type override, but is its own
-// dialog (rather than a plain QMenu submenu) so more per-game info/
-// settings can be added here later without needing another menu entry.
 void LibraryScreen::showGameDetailsDialog(const QString& path, QWidget* anchor)
 {
     QDialog dlg(anchor ? anchor->window() : this);
@@ -1043,16 +843,9 @@ void LibraryScreen::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
 
-    // Tiles are a fixed 140px with 18px grid spacing; recompute how many
-    // fit across the current width so the grid actually fills the row
-    // (wrapping to a new line once it can't fit another tile) instead of
-    // staying locked at a fixed column count and leaving empty space on
-    // the right on wider windows.
     const int tileSize = kCardFootprint;
     const int spacing = 18 - 2 * kCardHoverPad;
     const int margins = 24 * 2;
-    // Account for the scroll area's vertical scrollbar so tiles don't
-    // get squeezed/wrapped early once a scrollbar appears.
     const int scrollBarAllowance = 24;
 
     int available = width() - margins - scrollBarAllowance;
@@ -1069,18 +862,41 @@ void LibraryScreen::resizeEvent(QResizeEvent* event)
 
 void LibraryScreen::relayout()
 {
-    grid->removeWidget(addTile);
-
+    // [Relayout Titreme Optimizasyonu]
+    // Widget'ları silip eklemek yerine sadece değişmesi gerekenlerin
+    // pozisyonunu grid içinde güncelleyerek anlık donmaların kökünü kazıdık.
     int index = 0;
     for (const QString& path : paths)
     {
         QToolButton* tile = tiles.value(path, nullptr);
         if (!tile) continue;
 
-        grid->removeWidget(tile);
-        grid->addWidget(tile, index / columns, index % columns);
+        int targetRow = index / columns;
+        int targetCol = index % columns;
+
+        int curRow = -1, curCol = -1, rs = -1, cs = -1;
+        int gridIndex = grid->indexOf(tile);
+        
+        if (gridIndex != -1) {
+            grid->getItemPosition(gridIndex, &curRow, &curCol, &rs, &cs);
+        }
+
+        if (curRow != targetRow || curCol != targetCol) {
+            grid->addWidget(tile, targetRow, targetCol);
+        }
         index++;
     }
 
-    grid->addWidget(addTile, index / columns, index % columns);
+    int targetRow = index / columns;
+    int targetCol = index % columns;
+    int curRow = -1, curCol = -1, rs = -1, cs = -1;
+    
+    int addGridIndex = grid->indexOf(addTile);
+    if (addGridIndex != -1) {
+        grid->getItemPosition(addGridIndex, &curRow, &curCol, &rs, &cs);
+    }
+    
+    if (curRow != targetRow || curCol != targetCol) {
+        grid->addWidget(addTile, targetRow, targetCol);
+    }
 }
