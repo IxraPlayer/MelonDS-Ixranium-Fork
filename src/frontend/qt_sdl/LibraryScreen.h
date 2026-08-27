@@ -11,17 +11,8 @@
 #include <QTimer>
 #include <QColor>
 #include <QResizeEvent>
-#include <QOpenGLWidget>
 
-// QOpenGLWidget instead of plain QWidget: this screen's paintEvent() fills
-// the whole window every single animation tick (5 additive radial-gradient
-// blobs + a vignette) and every game tile repaints its own antialiased
-// glass panel/border/glow on hover - all of that used to be blended by the
-// CPU raster backend. Basing the widget (and the tile scroll viewport, see
-// the constructor) on QOpenGLWidget hands that blending/compositing to the
-// GPU instead, which is what was actually causing the library to "kasmak"
-// on anything but a very small collection.
-class LibraryScreen : public QOpenGLWidget
+class LibraryScreen : public QWidget
 {
     Q_OBJECT
 
