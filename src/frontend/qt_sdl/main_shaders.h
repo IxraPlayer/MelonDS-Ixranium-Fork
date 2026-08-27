@@ -124,7 +124,13 @@ vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize)
                                         abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
     float edgeMag = min(d1, d2);
-    float blendStrength = smoothstep(0.015, 0.07, edgeMag) * cornerDist;
+    // Very high local contrast (thick black outlines against bright
+    // colour, which is exactly what NDS anime-style sprites use) is
+    // where this used to speckle: as edgeMag grows past a normal edge
+    // it now ramps back down instead of staying maxed out, so outlines
+    // are left mostly alone while softer diagonals still get smoothed.
+    float blendStrength = smoothstep(0.02, 0.09, edgeMag) * cornerDist
+                         * (1.0 - smoothstep(0.35, 0.7, edgeMag));
 
     vec3 sideAvg = mix(side1, side2, 0.5);
     vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
@@ -154,10 +160,18 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
     vec3 rcpMax = 1.0 / max(mx, vec3(1e-4));
     vec3 ampl = clamp(min(mn, 2.0 - mx) * rcpMax, 0.0, 1.0);
     ampl = sqrt(ampl);
+    // Cap the amplitude outright - this is what was letting thick
+    // black-outline-vs-bright-colour boundaries (the sprite artwork's
+    // own line art) get sharpened at near-full strength, which is what
+    // produced the speckled/dashed white halo along every character
+    // outline. Real detail still gets a solid push; already-hard edges
+    // don't get pushed any further.
+    ampl = min(ampl, 0.45);
 
-    // sharpness in [0,1] - raised from the initial 0.5 default, which
-    // read as barely-there against a full pixel-art source.
-    const float sharpness = 0.85;
+    // sharpness in [0,1] - pulled back down; 0.85 was tuned purely for
+    // "does the effect show at all" and turned out too hot once actual
+    // sprite line art was on screen.
+    const float sharpness = 0.4;
     float peak = -1.0 / mix(8.0, 5.0, sharpness);
     vec3 cw = ampl * peak;
 
