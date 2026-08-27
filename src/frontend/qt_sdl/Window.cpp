@@ -1097,12 +1097,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
     // though it's flagged as a tool window. Force the exstyle by hand
     // once the native window exists so it always stays merged under
     // MainWindow instead of getting its own icon.
-    liveKeyboardPreview->winId(); // force native HWND creation now
-    HWND kbHwnd = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
-    LONG_PTR exStyle = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
-    exStyle |= WS_EX_TOOLWINDOW;
-    exStyle &= ~WS_EX_APPWINDOW;
-    SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, exStyle);
+    //
+    // WS_EX_TOOLWINDOW alone isn't actually enough to guarantee this: an
+    // *unowned* tool window (GWLP_HWNDPARENT unset/wrong) can still pick
+    // up its own taskbar button on Windows 11. Qt normally wires this up
+    // via the QWidget parent given to the constructor, but that link can
+    // get lost - e.g. across a fullscreen HWND swap - so set the real
+    // Win32 owner explicitly too, every time visibility flips on, instead
+    // of trusting it was preserved.
+    applyLiveKeyboardPreviewToolStyle();
 #elif defined(Q_OS_LINUX)
     // Same idea on X11: Qt::Tool usually keeps this out of the taskbar,
     // but some window managers only reliably honor it via the explicit
@@ -3214,6 +3217,26 @@ void MainWindow::positionLiveKeyboardPreview()
     liveKeyboardPreview->raise();
 }
 
+#ifdef Q_OS_WIN
+void MainWindow::applyLiveKeyboardPreviewToolStyle()
+{
+    if (!liveKeyboardPreview) return;
+    liveKeyboardPreview->winId(); // force native HWND creation now
+    HWND kbHwnd = reinterpret_cast<HWND>(liveKeyboardPreview->winId());
+    LONG_PTR exStyle = GetWindowLongPtr(kbHwnd, GWL_EXSTYLE);
+    exStyle |= WS_EX_TOOLWINDOW;
+    exStyle &= ~WS_EX_APPWINDOW;
+    SetWindowLongPtr(kbHwnd, GWL_EXSTYLE, exStyle);
+    // Belt-and-suspenders: force the real Win32 owner to MainWindow's HWND
+    // by hand. An unowned WS_EX_TOOLWINDOW window can still earn its own
+    // taskbar button on Windows 11, and Qt's parent->owner wiring doesn't
+    // always survive things like a fullscreen HWND swap.
+    winId(); // make sure MainWindow itself has a native HWND to point to
+    HWND mainHwnd = reinterpret_cast<HWND>(winId());
+    SetWindowLongPtr(kbHwnd, GWLP_HWNDPARENT, (LONG_PTR)mainHwnd);
+}
+#endif
+
 void MainWindow::updateLiveKeyboardPreviewVisibility()
 {
     if (!liveKeyboardPreview) return;
@@ -3224,6 +3247,9 @@ void MainWindow::updateLiveKeyboardPreviewVisibility()
     bool visible = showKeyboardPreview && inGame;
     if (visible) positionLiveKeyboardPreview(); // re-anchor to the panel now that it's actually showing
     liveKeyboardPreview->setVisible(visible);
+#ifdef Q_OS_WIN
+    if (visible) applyLiveKeyboardPreviewToolStyle();
+#endif
 }
 
 void MainWindow::refreshKeyboardPreviews()

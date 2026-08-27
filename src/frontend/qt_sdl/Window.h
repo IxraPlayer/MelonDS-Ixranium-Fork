@@ -111,6 +111,12 @@ protected:
     void positionLiveKeyboardPreview();
     void updateLiveKeyboardPreviewVisibility();
     void refreshKeyboardPreviews();
+#ifdef Q_OS_WIN
+    // Forces WS_EX_TOOLWINDOW + a real Win32 owner onto liveKeyboardPreview's
+    // HWND so it can never earn its own taskbar button; see call sites for
+    // why this has to be reapplied rather than set once.
+    void applyLiveKeyboardPreviewToolStyle();
+#endif
     void changeEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
 #ifdef Q_OS_WIN
