@@ -3099,8 +3099,15 @@ void MainWindow::applyOptimizedGraphics3D()
     // which is effectively supersampled antialiasing) and enable the
     // higher-quality polygon rasteriser, but don't downgrade a value
     // the user already set higher manually.
-    if (globalCfg.GetInt("3D.GL.ScaleFactor") < 6)
-        globalCfg.SetInt("3D.GL.ScaleFactor", 6);
+    //
+    // Reverted to leaving ScaleFactor alone (native 1x): forcing 6x
+    // didn't actually fix the jagged 3D model this was meant to fix
+    // (so the cause isn't resolution/AA - most likely that scene is a
+    // 2D-captured bitmap rather than live geometry, or the renderer
+    // switch itself isn't taking, both of which 6x can't do anything
+    // about), and it was expensive enough to cause visible stutter.
+    // Optimized Graphics is designed to stay native-res; only force
+    // the free stuff below.
     globalCfg.SetBool("3D.GL.BetterPolygons", true);
 
     // Perspective-correct hi-res vertex coordinates: defaults on, but a
