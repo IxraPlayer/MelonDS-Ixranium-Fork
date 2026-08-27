@@ -45,18 +45,20 @@ void main()
 }
 )";
 
-// GPU edge-directed upscale ("Sharp Upscale" v2), xBR-inspired.
-// Single fragment-shader pass, runs entirely on the GPU as part of the
-// normal screen-blit draw call - no extra render target, no CPU work,
-// no extra thread synchronisation. Replaces the old CPU-side EPX/Scale2x
-// 2x prepass (sharpUpscale2x in Screen.cpp), which only looked at the
-// 4 orthogonal neighbours of each pixel. This version samples the full
-// 3x3 neighbourhood and picks a diagonal blend direction from local
-// luma edges (like xBR's edge detection step), which gives smoother,
-// less jagged diagonals with very little halo/ringing risk since we
-// only ever blend between the centre pixel and its immediate neighbours.
-// Toggled at runtime via uSharpUpscale so filtering can stay off for
-// users who prefer raw nearest/bilinear.
+// GPU Anime4K-style upscale ("Optimized Graphics"), adapted from the
+// Anime4K family of shaders (gradient-guided line push + refine) into a
+// single fragment-shader pass - runs entirely on the GPU as part of the
+// normal screen-blit draw call, no extra render target, no CPU work, no
+// extra thread synchronisation. Anime4K normally chains several passes
+// (luminance gradient -> push/thin -> refine); here that pipeline is
+// folded into one pass: a Sobel gradient finds each line's direction and
+// strength, a "push" step samples along the gradient normal and pulls
+// the centre texel towards whichever side is more extreme (Anime4K's
+// core line-thinning trick, so linework stays crisp instead of smearing
+// into a flat gradient when magnified), and a refine/unsharp step
+// restores the contrast the gradient step softens. Toggled at runtime
+// via uSharpUpscale so filtering can stay off for users who prefer raw
+// nearest/bilinear.
 const char* kScreenFS = R"(#version 140
 
 uniform sampler2DArray ScreenTex;
@@ -71,15 +73,15 @@ float luma(vec3 c)
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
 
-vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
+// Anime4K-style "push" (gradient-guided line thinning): estimate the
+// local luminance gradient with a Sobel operator, then step a short
+// distance along that gradient (i.e. across the line/edge) on both
+// sides and pull the centre sample towards whichever side is more
+// extreme relative to it. This is what keeps thin anime-style linework
+// crisp under magnification instead of it smearing into a soft
+// gradient, which is the point of Anime4K's line-thinning pass.
+vec3 anime4kPush(sampler2DArray tex, vec3 uv, vec2 texel)
 {
-    vec2 pixelPos = uv.xy * texSize;
-    vec2 subpix = fract(pixelPos);
-
-    // 3x3 neighbourhood + the 4 "further" pixels (2 steps in each axis)
-    // used purely to strengthen edge-direction confidence, the way xBR's
-    // larger comparison window reduces false-positive diagonals compared
-    // to a plain 3x3 rule.
     vec3 c  = textureOffset(tex, uv, ivec2( 0,  0)).rgb;
     vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
     vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
@@ -89,75 +91,45 @@ vec3 xbrEdgeSample(sampler2DArray tex, vec3 uv, vec2 texSize)
     vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
     vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
     vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
-    vec3 nn = textureOffset(tex, uv, ivec2( 0, -2)).rgb;
-    vec3 ss = textureOffset(tex, uv, ivec2( 0,  2)).rgb;
-    vec3 ww = textureOffset(tex, uv, ivec2(-2,  0)).rgb;
-    vec3 ee = textureOffset(tex, uv, ivec2( 2,  0)).rgb;
 
-    float lc = luma(c), ln = luma(n), ls = luma(s), lw = luma(w), le = luma(e);
-    float lnw = luma(nw), lne = luma(ne), lsw = luma(sw), lse = luma(se);
-    float lnn = luma(nn), lss = luma(ss), lww = luma(ww), lee = luma(ee);
+    float lnw = luma(nw), ln = luma(n), lne = luma(ne);
+    float lw  = luma(w),                le = luma(e);
+    float lsw = luma(sw), ls = luma(s), lse = luma(se);
 
-    bvec2 q = greaterThanEqual(subpix, vec2(0.5));
+    // Sobel gradient - points across the strongest local edge.
+    float gx = (lne + 2.0*le + lse) - (lnw + 2.0*lw + lsw);
+    float gy = (lsw + 2.0*ls + lse) - (lnw + 2.0*ln + lne);
+    float gmag = length(vec2(gx, gy));
 
-    vec3 diagB; vec3 side1, side2;
-    float d1, d2;
-    float farConfirm; // extra confidence term from the "further" pixels
+    if (gmag < 1e-4)
+        return c;
 
-    if (!q.x && !q.y) { diagB = nw; side1 = n; side2 = w;
-                         d1 = abs(lnw - lc) + abs(ln - lw);
-                         d2 = abs(ln - lnw) + abs(lw - lc);
-                         farConfirm = abs(lnn - ls) + abs(lww - le); }
-    else if (q.x && !q.y) { diagB = ne; side1 = n; side2 = e;
-                         d1 = abs(lne - lc) + abs(ln - le);
-                         d2 = abs(ln - lne) + abs(le - lc);
-                         farConfirm = abs(lnn - ls) + abs(lee - lw); }
-    else if (!q.x && q.y) { diagB = sw; side1 = s; side2 = w;
-                         d1 = abs(lsw - lc) + abs(ls - lw);
-                         d2 = abs(ls - lsw) + abs(lw - lc);
-                         farConfirm = abs(lss - ln) + abs(lww - le); }
-    else { diagB = se; side1 = s; side2 = e;
-                         d1 = abs(lse - lc) + abs(ls - le);
-                         d2 = abs(ls - lse) + abs(le - lc);
-                         farConfirm = abs(lss - ln) + abs(lee - lw); }
+    vec2 dir = vec2(gx, gy) / gmag;
 
-    // smooth (not hard-cutoff) distance from the source-texel centre to
-    // the diagonal corner - blend strength now ramps continuously, which
-    // is what gives noticeably smoother diagonals than a single fixed
-    // blend factor, closer to a properly antialiased high-order upscale.
-    float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
-                                        abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
+    // The actual "push": look a little further out along the gradient
+    // on each side of the centre texel to see which direction the line
+    // continues towards, rather than only the immediate neighbours.
+    vec3 pushPos = texture(tex, vec3(uv.xy + dir * texel * 1.5, uv.z)).rgb;
+    vec3 pushNeg = texture(tex, vec3(uv.xy - dir * texel * 1.5, uv.z)).rgb;
 
-    float edgeMag = min(d1, d2);
-    // fold the far-neighbourhood confidence in: a real diagonal edge is
-    // still visible 2 texels out, noise/dither is not - this suppresses
-    // blending on dithered/noisy source material.
-    float confidence = smoothstep(0.0, 0.25, farConfirm);
-    // Wider, more sensitive ramp + higher ceiling than before - the old
-    // (0.35 .. 0.75) range left most diagonals barely touched. xBRZ-style
-    // corner rounding wants the corner texel to fully commit to the blend
-    // once an edge is confidently detected, otherwise the "2x" look never
-    // materialises and it just looks like a faint blur.
-    float blendStrength = smoothstep(0.008, 0.05, edgeMag) * cornerDist * mix(0.75, 1.0, confidence);
+    float lc = luma(c), lp = luma(pushPos), lm = luma(pushNeg);
 
-    // True xBRZ-style corner rounding: blend the diagonal corner texel
-    // with the average of both its orthogonal neighbours (not just one
-    // side), which is what actually produces the smooth stair-stepped
-    // diagonal edge instead of a soft diffuse blend.
-    vec3 sideAvg = mix(side1, side2, 0.5);
-    vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
-    return mix(c, blendTarget, blendStrength);
+    // Pull the centre towards whichever side of the line is more
+    // extreme relative to it - this is what thins a line down instead
+    // of just blurring across it.
+    vec3 target = (abs(lp - lc) > abs(lm - lc)) ? pushPos : pushNeg;
+
+    float strength = smoothstep(0.02, 0.18, gmag) * 0.55;
+    return mix(c, target, strength);
 }
 
-// Unsharp-mask pass applied after the edge-directed blend above. The
-// rotated-grid supersampling in xbrEdgeUpscale softens the image quite a
-// bit (that's the whole point - smooth diagonals) but as a side effect the
-// result looks noticeably blurrier than the raw source. This restores
-// perceived detail/contrast without re-introducing jaggies: it only pushes
-// the *already-computed* pixel away from its local (low-pass) average, it
-// never samples new high-frequency data, so it can't undo the anti-aliasing
-// itself.
-vec3 sharpenPass(sampler2DArray tex, vec3 uv, vec3 center)
+// Refine/unsharp pass, run after the push step above - Anime4K's own
+// pipeline ends the same way, since gradient-guided pushing sharpens
+// line direction but softens overall contrast. This restores perceived
+// detail without reintroducing jaggies: it only pushes the
+// already-computed pixel away from its local (low-pass) average, it
+// never samples new high-frequency data, so it can't undo the push step.
+vec3 refinePass(sampler2DArray tex, vec3 uv, vec3 center)
 {
     vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
     vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
@@ -167,37 +139,33 @@ vec3 sharpenPass(sampler2DArray tex, vec3 uv, vec3 center)
     vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
     vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
     vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
-    // 8-tap (3x3 minus centre) low-pass instead of the old 4-tap cross -
-    // a wider, rounder blur kernel means the unsharp mask pulls out real
-    // texture detail evenly in every direction instead of only along the
-    // axes, which is what was making textures look "flat" before.
+    // 8-tap (3x3 minus centre) low-pass - a wide, round blur kernel
+    // means the unsharp mask pulls out real texture detail evenly in
+    // every direction instead of only along the axes.
     vec3 blur = (n + s + w + e) * 0.15 + (nw + ne + sw + se) * 0.1;
 
     const float kSharpAmount = 1.3;
-    vec3 diff = center - blur;
-    // Clamp the push so we sharpen real edges hard without blowing out
+    // Clamp the push so real edges sharpen hard without blowing out
     // into visible halos/ringing on high-contrast boundaries.
-    diff = clamp(diff, -0.45, 0.45);
-    vec3 sharpened = center + diff * kSharpAmount;
-    return clamp(sharpened, 0.0, 1.0);
+    vec3 diff = clamp(center - blur, -0.45, 0.45);
+    return clamp(center + diff * kSharpAmount, 0.0, 1.0);
 }
 
-vec3 xbrEdgeUpscale(sampler2DArray tex, vec3 uv)
+vec3 anime4kUpscale(sampler2DArray tex, vec3 uv)
 {
     vec2 texSize = vec2(textureSize(tex, 0).xy);
     vec2 texel = 1.0 / texSize;
 
-    // 4-tap rotated-grid supersampling: evaluate the edge/blend estimate
-    // at 4 sub-fragment offsets and average. This is what pushes quality
-    // beyond a plain single-sample xBR pass - it's the same trick MSAA
-    // uses, applied to our own shading instead of geometry, and is
+    // 4-tap rotated-grid supersampling: evaluate the push estimate at 4
+    // sub-fragment offsets and average - the same trick MSAA uses,
+    // applied to our own shading instead of geometry, and it's
     // resolution-independent (scales for free with output/window size
     // instead of needing a fixed "Nx" source-side factor).
     vec2 o = texel * 0.4;
-    vec3 s0 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x, -o.y*0.5), uv.z), texSize);
-    vec3 s1 = xbrEdgeSample(tex, vec3(uv.xy + vec2( o.x*0.5, -o.y), uv.z), texSize);
-    vec3 s2 = xbrEdgeSample(tex, vec3(uv.xy + vec2(-o.x*0.5,  o.y), uv.z), texSize);
-    vec3 s3 = xbrEdgeSample(tex, vec3(uv.xy + vec2( o.x,  o.y*0.5), uv.z), texSize);
+    vec3 s0 = anime4kPush(tex, vec3(uv.xy + vec2(-o.x, -o.y*0.5), uv.z), texel);
+    vec3 s1 = anime4kPush(tex, vec3(uv.xy + vec2( o.x*0.5, -o.y), uv.z), texel);
+    vec3 s2 = anime4kPush(tex, vec3(uv.xy + vec2(-o.x*0.5,  o.y), uv.z), texel);
+    vec3 s3 = anime4kPush(tex, vec3(uv.xy + vec2( o.x,  o.y*0.5), uv.z), texel);
 
     return (s0 + s1 + s2 + s3) * 0.25;
 }
@@ -207,8 +175,8 @@ void main()
     vec3 rgb;
     if (uSharpUpscale != 0)
     {
-        rgb = xbrEdgeUpscale(ScreenTex, fTexcoord);
-        rgb = sharpenPass(ScreenTex, fTexcoord, rgb);
+        rgb = anime4kUpscale(ScreenTex, fTexcoord);
+        rgb = refinePass(ScreenTex, fTexcoord, rgb);
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
