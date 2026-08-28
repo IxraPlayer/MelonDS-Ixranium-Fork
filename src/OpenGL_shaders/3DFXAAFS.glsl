@@ -49,7 +49,7 @@ void main()
     float threshold = max(edgeThresholdMin, lMax * edgeThresholdMax);
     if (range < threshold)
     {
-        oColor = vec4(rgbCenter, 1.0);
+        oColor = texture(ColorBuffer, fTexcoord);
         return;
     }
 
@@ -70,5 +70,14 @@ void main()
     float blend = clamp((range - threshold) / max(range, 1e-4), 0.0, 0.75);
     vec3 result = mix(rgbCenter, (rgbA + rgbB) * 0.5, blend);
 
-    oColor = vec4(result, 1.0);
+    // Alpha is not colour data here - it's the 3D layer's per-pixel
+    // "is there anything here" mask that the 2D compositor uses to
+    // decide whether to show this layer or the 2D graphics underneath.
+    // The early-return branch above already passes it through
+    // untouched via rgbCenter's source texel; this branch must too,
+    // instead of hardcoding it to 1.0 (opaque) - forcing every pixel
+    // opaque here is what was corrupting scenes with no 3D content in
+    // them at all (this pass runs every frame regardless).
+    float a = texture(ColorBuffer, fTexcoord).a;
+    oColor = vec4(result, a);
 }
