@@ -155,7 +155,12 @@ vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize, vec2 stepUV)
     float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
                                         abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
-    float strength = flankAgreement * centreIsOdd * cornerDist * 0.85;
+    // Pulled back from 0.85 to 0.6: this stage pulls a pixel toward a
+    // diagonal-line colour it detected nearby, and at full strength on
+    // top of the other three stages it was overshooting on borderline
+    // detections - visible as fine shimmering/speckling ("parazit")
+    // rather than a clean diagonal, especially on busy backgrounds.
+    float strength = flankAgreement * centreIsOdd * cornerDist * 0.6;
     return mix(c, diag, strength);
 }
 
@@ -246,16 +251,15 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center, vec2 stepUV)
     // produced the speckled/dashed white halo along every character
     // outline. Real detail still gets a solid push; already-hard edges
     // don't get pushed any further.
-    // 0.45 -> 0.5: with cleanupPass now tightened below to leave real
-    // edges (like these outlines) alone instead of softening them back
-    // down, there's a bit more headroom here before the halo comes
-    // back - this is the crisper-blacks request from the previous cap.
-    ampl = min(ampl, 0.5);
+    // 0.5 -> 0.4: with diagonalReconnect also pulled back above, the
+    // combined stack was still overshooting on mid-contrast detail,
+    // reading as visible speckle/noise rather than a clean sharpen.
+    ampl = min(ampl, 0.4);
 
-    // sharpness in [0,1] - pulled back down; 0.85 was tuned purely for
-    // "does the effect show at all" and turned out too hot once actual
-    // sprite line art was on screen.
-    const float sharpness = 0.45;
+    // sharpness in [0,1] - pulled back further; still noticeably
+    // sharper than off, but the previous 0.45 was tipping into visible
+    // grain on textured/patterned areas.
+    const float sharpness = 0.35;
     float peak = -1.0 / mix(8.0, 5.0, sharpness);
     vec3 cw = ampl * peak;
 
