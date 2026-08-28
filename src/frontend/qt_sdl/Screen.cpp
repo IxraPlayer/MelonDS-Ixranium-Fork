@@ -35,6 +35,14 @@
 
 #include "main.h"
 #include "EmuInstance.h"
+#include "smaa_shaders.h"
+
+// Master toggle for the Stage 5 SMAA post-process pass (see
+// smaa_shaders.h). Left as a single #define specifically so this can be
+// switched off in one place, with everything falling back exactly to
+// the previous (stages 0-4 only) behaviour, if it ever needs to be
+// ruled out while narrowing down an unrelated rendering issue.
+#define ENABLE_SMAA 1
 
 #include "NDS.h"
 #include "GPU.h"
@@ -1204,6 +1212,80 @@ void ScreenPanelGL::initOpenGL()
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, 256, 192, 2, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
 
+#if ENABLE_SMAA
+    // Stage 5 (SMAA). Compile the three pass programs plus the
+    // passthrough copy, and set up the [0,1]-space fullscreen quad they
+    // all share (deliberately separate from screenVertexBuffer, which
+    // is in 0..256/0..192 DS-pixel space and carries a per-screen
+    // uTransform - see smaa_shaders.h for why these passes must NOT use
+    // that transform).
+    OpenGL::CompileVertexFragmentProgram(smaaEdgeProgram,
+                                         kSMAAQuadVS, kSMAAEdgeFS,
+                                         "SMAAEdgeShader",
+                                         {{"vPosition", 0}},
+                                         {{"oEdges", 0}});
+    glUseProgram(smaaEdgeProgram);
+    glUniform1i(glGetUniformLocation(smaaEdgeProgram, "ColorTex"), 0);
+    smaaEdgeTexelSizeULoc = glGetUniformLocation(smaaEdgeProgram, "uTexelSize");
+
+    OpenGL::CompileVertexFragmentProgram(smaaBlendProgram,
+                                         kSMAAQuadVS, kSMAABlendFS,
+                                         "SMAABlendShader",
+                                         {{"vPosition", 0}},
+                                         {{"oWeights", 0}});
+    glUseProgram(smaaBlendProgram);
+    glUniform1i(glGetUniformLocation(smaaBlendProgram, "EdgesTex"), 0);
+    smaaBlendTexelSizeULoc = glGetUniformLocation(smaaBlendProgram, "uTexelSize");
+
+    OpenGL::CompileVertexFragmentProgram(smaaNeighborProgram,
+                                         kSMAAQuadVS, kSMAANeighborFS,
+                                         "SMAANeighborShader",
+                                         {{"vPosition", 0}},
+                                         {{"oColor", 0}});
+    glUseProgram(smaaNeighborProgram);
+    glUniform1i(glGetUniformLocation(smaaNeighborProgram, "ColorTex"), 0);
+    glUniform1i(glGetUniformLocation(smaaNeighborProgram, "WeightsTex"), 1);
+    smaaNeighborTexelSizeULoc = glGetUniformLocation(smaaNeighborProgram, "uTexelSize");
+
+    OpenGL::CompileVertexFragmentProgram(smaaPassthroughProgram,
+                                         kSMAAQuadVS, kSMAAPassthroughFS,
+                                         "SMAAPassthroughShader",
+                                         {{"vPosition", 0}},
+                                         {{"oColor", 0}});
+    glUseProgram(smaaPassthroughProgram);
+    glUniform1i(glGetUniformLocation(smaaPassthroughProgram, "ColorTex"), 0);
+
+    const float smaaQuadVerts[] =
+    {
+        0.f, 0.f,
+        0.f, 1.f,
+        1.f, 1.f,
+        0.f, 0.f,
+        1.f, 1.f,
+        1.f, 0.f,
+    };
+
+    glGenBuffers(1, &smaaQuadVertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, smaaQuadVertexBuffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(smaaQuadVerts), smaaQuadVerts, GL_STATIC_DRAW);
+
+    glGenVertexArrays(1, &smaaQuadVertexArray);
+    glBindVertexArray(smaaQuadVertexArray);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2*4, (void*)(0));
+
+    // Textures/FBOs themselves are allocated lazily by
+    // ensureSMAABuffers() once the actual window size is known (and
+    // reallocated on resize) - just reserve the GL object names here.
+    glGenTextures(1, &smaaColorTex);
+    glGenTextures(1, &smaaEdgesTex);
+    glGenTextures(1, &smaaWeightsTex);
+    glGenFramebuffers(1, &smaaColorFBO);
+    glGenFramebuffers(1, &smaaEdgesFBO);
+    glGenFramebuffers(1, &smaaWeightsFBO);
+    smaaBufWidth = 0;
+    smaaBufHeight = 0;
+#endif
 
     OpenGL::CompileVertexFragmentProgram(osdShader,
                                          kScreenVS_OSD, kScreenFS_OSD,
@@ -1268,6 +1350,23 @@ void ScreenPanelGL::deinitOpenGL()
     glDeleteBuffers(1, &screenVertexBuffer);
 
     glDeleteProgram(screenShaderProgram);
+
+#if ENABLE_SMAA
+    glDeleteTextures(1, &smaaColorTex);
+    glDeleteTextures(1, &smaaEdgesTex);
+    glDeleteTextures(1, &smaaWeightsTex);
+    glDeleteFramebuffers(1, &smaaColorFBO);
+    glDeleteFramebuffers(1, &smaaEdgesFBO);
+    glDeleteFramebuffers(1, &smaaWeightsFBO);
+    glDeleteVertexArrays(1, &smaaQuadVertexArray);
+    glDeleteBuffers(1, &smaaQuadVertexBuffer);
+    glDeleteProgram(smaaEdgeProgram);
+    glDeleteProgram(smaaBlendProgram);
+    glDeleteProgram(smaaNeighborProgram);
+    glDeleteProgram(smaaPassthroughProgram);
+    smaaBufWidth = 0;
+    smaaBufHeight = 0;
+#endif
 
 
     for (const auto& [key, tex] : osdTextures)
@@ -1357,6 +1456,106 @@ void ScreenPanelGL::kbPreviewTextureUpload()
                  GL_RGBA, GL_UNSIGNED_BYTE, kbPreviewImage.bits());
 }
 
+#if ENABLE_SMAA
+// (Re)allocates the SMAA working buffers to match the current window
+// size. Deliberately a single shared set of buffers covering the whole
+// window rather than one set per screen: SMAA needs an axis-aligned
+// pixel grid to search/blend on, and the full composited window image
+// (both screens already drawn into it, in whatever position/rotation
+// the current layout uses) already IS one - see smaa_shaders.h for the
+// full reasoning. A no-op when the size hasn't changed.
+void ScreenPanelGL::ensureSMAABuffers(int width, int height)
+{
+    if (width == smaaBufWidth && height == smaaBufHeight)
+        return;
+    if (width <= 0 || height <= 0)
+        return;
+
+    smaaBufWidth = width;
+    smaaBufHeight = height;
+
+    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaColorTex, 0);
+
+    glBindTexture(GL_TEXTURE_2D, smaaEdgesTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, smaaEdgesFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaEdgesTex, 0);
+
+    glBindTexture(GL_TEXTURE_2D, smaaWeightsTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glBindFramebuffer(GL_FRAMEBUFFER, smaaWeightsFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaWeightsTex, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// Runs the three SMAA passes (edge detect -> blend weight -> neighbour
+// blend) over smaaColorTex in place, then copies the result back to the
+// default framebuffer. Assumes smaaColorTex already holds the fully
+// composited image the caller wants antialiased (i.e. drawScreen()'s
+// normal per-screen draw loop, redirected into smaaColorFBO instead of
+// the default framebuffer - see drawScreen() below), and that the GL
+// viewport is currently (0, 0, width, height).
+void ScreenPanelGL::smaaRunPasses(int width, int height)
+{
+    glBindVertexArray(smaaQuadVertexArray);
+    glBindBuffer(GL_ARRAY_BUFFER, smaaQuadVertexBuffer);
+
+    float texelW = 1.0f / (float)width;
+    float texelH = 1.0f / (float)height;
+
+    // Pass 1: edge detection, smaaColorTex -> smaaEdgesTex
+    glBindFramebuffer(GL_FRAMEBUFFER, smaaEdgesFBO);
+    glViewport(0, 0, width, height);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(smaaEdgeProgram);
+    glUniform2f(smaaEdgeTexelSizeULoc, texelW, texelH);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Pass 2: blend weight, smaaEdgesTex -> smaaWeightsTex
+    glBindFramebuffer(GL_FRAMEBUFFER, smaaWeightsFBO);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glUseProgram(smaaBlendProgram);
+    glUniform2f(smaaBlendTexelSizeULoc, texelW, texelH);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, smaaEdgesTex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Pass 3: neighbourhood blend, (smaaColorTex, smaaWeightsTex) -> default framebuffer
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width, height);
+    glUseProgram(smaaNeighborProgram);
+    glUniform2f(smaaNeighborTexelSizeULoc, texelW, texelH);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, smaaWeightsTex);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+}
+#endif
+
 void ScreenPanelGL::drawScreen()
 {
     if (!glContext) return;
@@ -1383,6 +1582,21 @@ void ScreenPanelGL::drawScreen()
     if (emuThread->emuIsActive())
     {
         auto nds = emuInstance->getNDS();
+
+#if ENABLE_SMAA
+        // Stage 5: redirect the normal per-screen draw loop below into
+        // the SMAA working buffer instead of the default framebuffer.
+        // Nothing else in this block changes - same shader, same
+        // transforms, same per-screen loop - only the render target
+        // differs, which is what keeps this a low-risk addition on top
+        // of the already-working stages 0-4 rather than a rewrite of
+        // them (see the design discussion this stage came out of).
+        ensureSMAABuffers(w, h);
+        glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glViewport(0, 0, w, h);
+#endif
 
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
@@ -1432,6 +1646,15 @@ void ScreenPanelGL::drawScreen()
         }
 
         screenSettingsLock.unlock();
+
+#if ENABLE_SMAA
+        // Both screens are now drawn, in their real final positions, into
+        // smaaColorTex - an ordinary axis-aligned 2D image regardless of
+        // whatever rotation/layout put them there. Run the three SMAA
+        // passes over it; the last of the three writes straight to the
+        // default framebuffer, so nothing further is needed here.
+        smaaRunPasses(w, h);
+#endif
     }
 
     osdUpdate();

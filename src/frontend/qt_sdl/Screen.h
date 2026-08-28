@@ -319,6 +319,25 @@ private:
     GLint screenShaderSharpUpscaleULoc;
     GLint screenShaderPixelScaleULoc;
 
+    // Stage 5 (SMAA post-process) resources. See smaa_shaders.h for the
+    // rationale and smaaApplyPass()/drawScreen() in Screen.cpp for how
+    // these are wired together. All sized to the full window (see
+    // ensureSMAABuffers()), since SMAA runs once on the whole composited
+    // image rather than per screen (deliberate design choice - see the
+    // comment above ensureSMAABuffers()).
+    GLuint smaaQuadVertexBuffer, smaaQuadVertexArray;
+    GLuint smaaColorFBO, smaaColorTex;
+    GLuint smaaEdgesFBO, smaaEdgesTex;
+    GLuint smaaWeightsFBO, smaaWeightsTex;
+    GLuint smaaEdgeProgram, smaaBlendProgram, smaaNeighborProgram, smaaPassthroughProgram;
+    GLint smaaEdgeTexelSizeULoc;
+    GLint smaaBlendTexelSizeULoc;
+    GLint smaaNeighborTexelSizeULoc;
+    int smaaBufWidth = 0, smaaBufHeight = 0;
+
+    void ensureSMAABuffers(int width, int height);
+    void smaaRunPasses(int width, int height);
+
     QMutex screenSettingsLock;
     WindowInfo windowInfo;
 
