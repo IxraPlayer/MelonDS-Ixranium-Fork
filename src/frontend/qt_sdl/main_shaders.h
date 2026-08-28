@@ -146,21 +146,27 @@ vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize, vec2 stepUV)
     // (i.e. "is this really one continuous diagonal-coloured line"),
     // and how much the centre pixel actually differs from that line -
     // both continuous, so there's no hard per-pixel flip.
-    const float simThresh = 0.06;
+    // Widened both thresholds a bit: catches more genuine diagonal
+    // strokes (as asked - more diagonal pixel merging), and since this
+    // stage's own strength multiplier is being turned down below at
+    // the same time, the extra detections don't add net noise.
+    const float simThresh = 0.075;
     float flankAgreement = 1.0 - smoothstep(0.0, simThresh,
                                              max(distance(diag, orthoA), distance(diag, orthoB)));
-    float centreIsOdd = smoothstep(0.02, simThresh * 1.5,
+    float centreIsOdd = smoothstep(0.015, simThresh * 1.5,
                                     min(distance(c, orthoA), distance(c, orthoB)));
 
     float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
                                         abs(subpix.y - (q.y ? 1.0 : 0.0))), 0.0, 1.0);
 
-    // Pulled back from 0.85 to 0.6: this stage pulls a pixel toward a
-    // diagonal-line colour it detected nearby, and at full strength on
-    // top of the other three stages it was overshooting on borderline
-    // detections - visible as fine shimmering/speckling ("parazit")
-    // rather than a clean diagonal, especially on busy backgrounds.
-    float strength = flankAgreement * centreIsOdd * cornerDist * 0.6;
+    // Pulled back from 0.85 to 0.5: this stage pulls a pixel toward a
+    // diagonal-line colour it detected nearby, and at higher strength
+    // on top of the other three stages it was overshooting on
+    // borderline detections - visible as fine shimmering/speckling
+    // ("parazit") rather than a clean diagonal, especially on busy
+    // backgrounds. Lower strength here is what makes the wider
+    // detection window above safe to widen instead of adding noise.
+    float strength = flankAgreement * centreIsOdd * cornerDist * 0.5;
     return mix(c, diag, strength);
 }
 
@@ -244,22 +250,27 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center, vec2 stepUV)
 
     vec3 rcpMax = 1.0 / max(mx, vec3(1e-4));
     vec3 ampl = clamp(min(mn, 2.0 - mx) * rcpMax, 0.0, 1.0);
-    ampl = sqrt(ampl);
+    // sqrt() was boosting tiny local-contrast values disproportionately
+    // (sqrt of a small number is relatively large) - that's exactly
+    // what a smooth 3D lighting gradient looks like per-pixel (a very
+    // small, continuous step), so this was over-sharpening 3D shading
+    // into visible banding/posterization, reading as "flat/2D" instead
+    // of round. A gentler exponent still catches real subtle detail
+    // but leaves smooth gradients mostly alone.
+    ampl = pow(ampl, vec3(0.7));
     // Cap the amplitude outright - this is what was letting thick
     // black-outline-vs-bright-colour boundaries (the sprite artwork's
     // own line art) get sharpened at near-full strength, which is what
     // produced the speckled/dashed white halo along every character
     // outline. Real detail still gets a solid push; already-hard edges
     // don't get pushed any further.
-    // 0.5 -> 0.4: with diagonalReconnect also pulled back above, the
-    // combined stack was still overshooting on mid-contrast detail,
-    // reading as visible speckle/noise rather than a clean sharpen.
-    ampl = min(ampl, 0.4);
+    // 0.4 -> 0.32: further noise/"parazit" reduction on top of the
+    // gentler ampl curve above.
+    ampl = min(ampl, 0.32);
 
-    // sharpness in [0,1] - pulled back further; still noticeably
-    // sharper than off, but the previous 0.45 was tipping into visible
-    // grain on textured/patterned areas.
-    const float sharpness = 0.35;
+    // sharpness in [0,1] - pulled back further again for the same
+    // noise-reduction pass.
+    const float sharpness = 0.3;
     float peak = -1.0 / mix(8.0, 5.0, sharpness);
     vec3 cw = ampl * peak;
 
@@ -296,7 +307,12 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result, vec2 stepUV)
     // the earlier stages, which is what this pass was meant for in the
     // first place - real dithering sits above it and survives intact.
     float pull = 1.0 - smoothstep(0.008, 0.02, diff);
-    return mix(result, avg, pull * 0.12);
+    // 0.12 -> 0.18: a bit more mop-up strength for the residual
+    // speckle/noise from the stages above, while the window itself
+    // (0.008-0.02) stays untouched so intentional dithering still
+    // survives - only the strength of what happens within that already-
+    // narrow band changed.
+    return mix(result, avg, pull * 0.18);
 }
 
 // Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
