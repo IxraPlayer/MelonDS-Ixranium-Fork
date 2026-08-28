@@ -1515,6 +1515,21 @@ void GLRenderer3D::RenderFrame()
     // supersampling and running both would be redundant extra cost.
     if (ScaleFactor <= 1)
     {
+        // Full state save/restore around this pass - this runs every
+        // frame regardless of whether the current scene has any 3D
+        // content in it (the 3D engine still runs each frame) and
+        // regardless of the Optimized Graphics toggle (ScaleFactor
+        // defaults to 1 either way), so any state this leaves behind
+        // corrupts every following 2D draw call on both screens. The
+        // previous version changed the viewport and disabled
+        // blend/scissor without ever putting them back, which is
+        // exactly what was causing the widespread, always-on quality
+        // regression - not the 2D shader tuning, not the toggle.
+        GLint prevViewport[4];
+        glGetIntegerv(GL_VIEWPORT, prevViewport);
+        GLboolean prevBlend = glIsEnabled(GL_BLEND);
+        GLboolean prevScissor = glIsEnabled(GL_SCISSOR_TEST);
+
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, AAFramebuffer);
         glViewport(0, 0, ScreenW, ScreenH);
@@ -1534,6 +1549,9 @@ void GLRenderer3D::RenderFrame()
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_STENCIL_TEST);
+        if (prevBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+        if (prevScissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
+        glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
 
         Parent.OutputTex3D = AAColorTex;
     }
