@@ -319,6 +319,18 @@ private:
     GLint screenShaderSharpUpscaleULoc;
     GLint screenShaderPixelScaleULoc;
 
+    // Tunable knobs for the Optimized Graphics stages 0-3 (see
+    // main_shaders.h). Locations only - values are set once in
+    // initOpenGL() to the exact previous hardcoded constants, so
+    // default behaviour is unchanged; a test/tuning harness can later
+    // override them via these same uniforms without touching the
+    // shader or this stage's own logic.
+    GLint uDiagSimThreshULoc, uDiagStrengthULoc;
+    GLint uEdgeBlendRangeULoc, uEdgeBackoffRangeULoc;
+    GLint uCasSharpnessULoc, uCasAmplCapULoc, uCasAmplPowULoc;
+    GLint uCleanupRangeULoc, uCleanupStrengthULoc;
+    GLint uSupersampleULoc;
+
     // Stage 5 (SMAA post-process) resources. See smaa_shaders.h for the
     // rationale and smaaApplyPass()/drawScreen() in Screen.cpp for how
     // these are wired together. All sized to the full window (see

@@ -1175,6 +1175,33 @@ void ScreenPanelGL::initOpenGL()
     screenShaderSharpUpscaleULoc = glGetUniformLocation(screenShaderProgram, "uSharpUpscale");
     screenShaderPixelScaleULoc = glGetUniformLocation(screenShaderProgram, "uPixelScale");
 
+    // Stages 0-3 tuning knobs: fetch locations and set every default to
+    // exactly the value that used to be hardcoded (see main_shaders.h
+    // for the original consts these replaced) - runtime behaviour is
+    // bit-for-bit unchanged unless one of these is explicitly
+    // overridden later, e.g. by a tuning/test harness.
+    uDiagSimThreshULoc    = glGetUniformLocation(screenShaderProgram, "uDiagSimThresh");
+    uDiagStrengthULoc     = glGetUniformLocation(screenShaderProgram, "uDiagStrength");
+    uEdgeBlendRangeULoc   = glGetUniformLocation(screenShaderProgram, "uEdgeBlendRange");
+    uEdgeBackoffRangeULoc = glGetUniformLocation(screenShaderProgram, "uEdgeBackoffRange");
+    uCasSharpnessULoc     = glGetUniformLocation(screenShaderProgram, "uCasSharpness");
+    uCasAmplCapULoc       = glGetUniformLocation(screenShaderProgram, "uCasAmplCap");
+    uCasAmplPowULoc       = glGetUniformLocation(screenShaderProgram, "uCasAmplPow");
+    uCleanupRangeULoc     = glGetUniformLocation(screenShaderProgram, "uCleanupRange");
+    uCleanupStrengthULoc  = glGetUniformLocation(screenShaderProgram, "uCleanupStrength");
+    uSupersampleULoc      = glGetUniformLocation(screenShaderProgram, "uSupersample");
+
+    glUniform1f(uDiagSimThreshULoc, 0.075f);
+    glUniform1f(uDiagStrengthULoc, 0.5f);
+    glUniform2f(uEdgeBlendRangeULoc, 0.02f, 0.09f);
+    glUniform2f(uEdgeBackoffRangeULoc, 0.35f, 0.7f);
+    glUniform1f(uCasSharpnessULoc, 0.3f);
+    glUniform1f(uCasAmplCapULoc, 0.32f);
+    glUniform1f(uCasAmplPowULoc, 0.7f);
+    glUniform2f(uCleanupRangeULoc, 0.008f, 0.02f);
+    glUniform1f(uCleanupStrengthULoc, 0.18f);
+    glUniform1i(uSupersampleULoc, 0); // 0 = existing 2x2 behaviour (default, unchanged)
+
     const float vertices[] =
     {
         0.f,   0.f,    0.f, 0.f, 0.f,

@@ -82,6 +82,24 @@ uniform sampler2DArray ScreenTex;
 uniform int uSharpUpscale;
 uniform int uPixelScale;
 
+// Tunable knobs for stages 0-3 below. Every default here matches the
+// previous hardcoded constant bit-for-bit, so nothing changes unless a
+// caller explicitly overrides one of these uniforms - the logic itself
+// is untouched, this only exposes the numbers it already used. Added
+// so a test/tuning environment can sweep these without editing and
+// recompiling the shader each time (see initOpenGL() in Screen.cpp for
+// where the defaults are set).
+uniform float uDiagSimThresh;     // diagonalReconnect: colour-match threshold (was: const simThresh = 0.075)
+uniform float uDiagStrength;      // diagonalReconnect: overall strength multiplier (was: * 0.5)
+uniform vec2  uEdgeBlendRange;    // edgeUpscale: blendStrength smoothstep range (was: smoothstep(0.02, 0.09, edgeMag))
+uniform vec2  uEdgeBackoffRange;  // edgeUpscale: high-contrast backoff range (was: smoothstep(0.35, 0.7, edgeMag))
+uniform float uCasSharpness;      // casSharpen: sharpness in [0,1] (was: const sharpness = 0.3)
+uniform float uCasAmplCap;        // casSharpen: amplitude cap (was: min(ampl, 0.32))
+uniform float uCasAmplPow;        // casSharpen: amplitude curve exponent (was: pow(ampl, 0.7))
+uniform vec2  uCleanupRange;      // cleanupPass: diff smoothstep range (was: smoothstep(0.008, 0.02, diff))
+uniform float uCleanupStrength;   // cleanupPass: pull multiplier (was: pull * 0.18)
+uniform int   uSupersample;       // main(): 1 = single sample (cheap), 0 or anything else = existing 2x2 (was: always 2x2)
+
 smooth in vec3 fTexcoord;
 
 out vec4 oColor;
@@ -150,10 +168,9 @@ vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize, vec2 stepUV)
     // strokes (as asked - more diagonal pixel merging), and since this
     // stage's own strength multiplier is being turned down below at
     // the same time, the extra detections don't add net noise.
-    const float simThresh = 0.075;
-    float flankAgreement = 1.0 - smoothstep(0.0, simThresh,
+    float flankAgreement = 1.0 - smoothstep(0.0, uDiagSimThresh,
                                              max(distance(diag, orthoA), distance(diag, orthoB)));
-    float centreIsOdd = smoothstep(0.015, simThresh * 1.5,
+    float centreIsOdd = smoothstep(0.015, uDiagSimThresh * 1.5,
                                     min(distance(c, orthoA), distance(c, orthoB)));
 
     float cornerDist = 1.0 - clamp(max(abs(subpix.x - (q.x ? 1.0 : 0.0)),
@@ -166,7 +183,7 @@ vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize, vec2 stepUV)
     // ("parazit") rather than a clean diagonal, especially on busy
     // backgrounds. Lower strength here is what makes the wider
     // detection window above safe to widen instead of adding noise.
-    float strength = flankAgreement * centreIsOdd * cornerDist * 0.5;
+    float strength = flankAgreement * centreIsOdd * cornerDist * uDiagStrength;
     return mix(c, diag, strength);
 }
 
@@ -220,8 +237,8 @@ vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize, vec3 center, vec2 st
     // where this used to speckle: as edgeMag grows past a normal edge
     // it now ramps back down instead of staying maxed out, so outlines
     // are left mostly alone while softer diagonals still get smoothed.
-    float blendStrength = smoothstep(0.02, 0.09, edgeMag) * cornerDist
-                         * (1.0 - smoothstep(0.35, 0.7, edgeMag));
+    float blendStrength = smoothstep(uEdgeBlendRange.x, uEdgeBlendRange.y, edgeMag) * cornerDist
+                         * (1.0 - smoothstep(uEdgeBackoffRange.x, uEdgeBackoffRange.y, edgeMag));
 
     vec3 sideAvg = mix(side1, side2, 0.5);
     vec3 blendTarget = mix(diagB, sideAvg, 0.5 - 0.5 * clamp((d2 - d1) / max(d1 + d2, 1e-4), -1.0, 1.0));
@@ -257,7 +274,7 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center, vec2 stepUV)
     // into visible banding/posterization, reading as "flat/2D" instead
     // of round. A gentler exponent still catches real subtle detail
     // but leaves smooth gradients mostly alone.
-    ampl = pow(ampl, vec3(0.7));
+    ampl = pow(ampl, vec3(uCasAmplPow));
     // Cap the amplitude outright - this is what was letting thick
     // black-outline-vs-bright-colour boundaries (the sprite artwork's
     // own line art) get sharpened at near-full strength, which is what
@@ -266,12 +283,11 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center, vec2 stepUV)
     // don't get pushed any further.
     // 0.4 -> 0.32: further noise/"parazit" reduction on top of the
     // gentler ampl curve above.
-    ampl = min(ampl, 0.32);
+    ampl = min(ampl, uCasAmplCap);
 
     // sharpness in [0,1] - pulled back further again for the same
     // noise-reduction pass.
-    const float sharpness = 0.3;
-    float peak = -1.0 / mix(8.0, 5.0, sharpness);
+    float peak = -1.0 / mix(8.0, 5.0, uCasSharpness);
     vec3 cw = ampl * peak;
 
     vec3 rcpWeight = 1.0 / (1.0 + 4.0 * cw);
@@ -306,13 +322,13 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result, vec2 stepUV)
     // narrower window only mops up genuinely tiny differences left by
     // the earlier stages, which is what this pass was meant for in the
     // first place - real dithering sits above it and survives intact.
-    float pull = 1.0 - smoothstep(0.008, 0.02, diff);
+    float pull = 1.0 - smoothstep(uCleanupRange.x, uCleanupRange.y, diff);
     // 0.12 -> 0.18: a bit more mop-up strength for the residual
     // speckle/noise from the stages above, while the window itself
     // (0.008-0.02) stays untouched so intentional dithering still
     // survives - only the strength of what happens within that already-
     // narrow band changed.
-    return mix(result, avg, pull * 0.18);
+    return mix(result, avg, pull * uCleanupStrength);
 }
 
 // Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
@@ -354,11 +370,26 @@ void main()
         // UV space, so the four taps stay exactly one output-pixel
         // apart regardless of window/upscale size.
         vec2 duv = fwidth(fTexcoord.xy) * 0.25;
-        vec3 s0 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
-        vec3 s1 = processPixel(vec3(fTexcoord.xy + vec2( duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
-        vec3 s2 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
-        vec3 s3 = processPixel(vec3(fTexcoord.xy + vec2( duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
-        rgb = (s0 + s1 + s2 + s3) * 0.25;
+        if (uSupersample == 1)
+        {
+            // Single-sample path: identical stage math, just evaluated
+            // once at the pixel centre instead of averaged over 4
+            // sub-pixel offsets. Cuts the per-pixel texture-fetch count
+            // (and therefore most of the cost of this shader) to a
+            // quarter, at the cost of the last bit of diagonal-edge
+            // smoothing the 2x2 average was providing. Off by default
+            // (see uSupersample's uniform default in Screen.cpp) so
+            // existing output is unchanged unless explicitly requested.
+            rgb = processPixel(fTexcoord, texSize, stepUV);
+        }
+        else
+        {
+            vec3 s0 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
+            vec3 s1 = processPixel(vec3(fTexcoord.xy + vec2( duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
+            vec3 s2 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
+            vec3 s3 = processPixel(vec3(fTexcoord.xy + vec2( duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
+            rgb = (s0 + s1 + s2 + s3) * 0.25;
+        }
     }
     else
         rgb = texture(ScreenTex, fTexcoord).rgb;
