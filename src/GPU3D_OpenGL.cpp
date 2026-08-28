@@ -1513,7 +1513,16 @@ void GLRenderer3D::RenderFrame()
     // FXAA post-pass: only meaningful at native (1x) resolution, since
     // Optimized Graphics/ScaleFactor>1 already antialiases via
     // supersampling and running both would be redundant extra cost.
-    if (ScaleFactor <= 1)
+    // Skip entirely when this frame has no 3D polygons at all (most 2D
+    // games, menu/title screens in mixed games, etc). This pass was
+    // running unconditionally every frame before, and pure-2D scenes
+    // like this were visibly corrupted by it even after the state
+    // save/restore and alpha fixes - so rather than keep chasing
+    // whatever subtle GL state interaction is still left, just don't
+    // touch the pipeline at all when there's nothing for this pass to
+    // actually antialias. 3D-containing frames (character models etc)
+    // still get it.
+    if (ScaleFactor <= 1 && GPU3D.RenderNumPolygons > 0)
     {
         // Full state save/restore around this pass - this runs every
         // frame regardless of whether the current scene has any 3D
