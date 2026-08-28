@@ -42,7 +42,7 @@
 // switched off in one place, with everything falling back exactly to
 // the previous (stages 0-4 only) behaviour, if it ever needs to be
 // ruled out while narrowing down an unrelated rendering issue.
-#define ENABLE_SMAA 1
+#define ENABLE_SMAA 0
 
 #include "NDS.h"
 #include "GPU.h"
@@ -1584,18 +1584,21 @@ void ScreenPanelGL::drawScreen()
         auto nds = emuInstance->getNDS();
 
 #if ENABLE_SMAA
-        // Stage 5: redirect the normal per-screen draw loop below into
-        // the SMAA working buffer instead of the default framebuffer.
-        // Nothing else in this block changes - same shader, same
-        // transforms, same per-screen loop - only the render target
-        // differs, which is what keeps this a low-risk addition on top
-        // of the already-working stages 0-4 rather than a rewrite of
-        // them (see the design discussion this stage came out of).
-        ensureSMAABuffers(w, h);
-        glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
-        glClearColor(0, 0, 0, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glViewport(0, 0, w, h);
+        // Stage 5 must only run when Optimized Graphics (stages 0-4) is
+        // actually on - matching sharpUpscale here is what keeps this
+        // stage invisible/inert when the user has the feature toggled
+        // off, instead of silently altering the image regardless of
+        // that setting (a real bug caught via screenshot comparison:
+        // this condition was missing in the first version).
+        bool runSMAA = (sharpUpscale != 0);
+        if (runSMAA)
+        {
+            ensureSMAABuffers(w, h);
+            glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
+            glClearColor(0, 0, 0, 1);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glViewport(0, 0, w, h);
+        }
 #endif
 
         glUseProgram(screenShaderProgram);
@@ -1648,12 +1651,11 @@ void ScreenPanelGL::drawScreen()
         screenSettingsLock.unlock();
 
 #if ENABLE_SMAA
-        // Both screens are now drawn, in their real final positions, into
-        // smaaColorTex - an ordinary axis-aligned 2D image regardless of
-        // whatever rotation/layout put them there. Run the three SMAA
-        // passes over it; the last of the three writes straight to the
-        // default framebuffer, so nothing further is needed here.
-        smaaRunPasses(w, h);
+        // See runSMAA above - only run these passes (and only overwrite
+        // the default framebuffer with their output) when Optimized
+        // Graphics is actually enabled.
+        if (runSMAA)
+            smaaRunPasses(w, h);
 #endif
     }
 
