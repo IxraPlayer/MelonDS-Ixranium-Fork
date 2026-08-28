@@ -261,16 +261,18 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
     vec3 avg = (n + s + w + e) * 0.25;
 
     float diff = distance(result, avg);
-    // Only the low end of the difference range gets pulled in - real
-    // edges sit well above this and are untouched.
-    // Window narrowed from 0.015-0.055 to 0.02-0.045: black outline
-    // edges sit right at the old window's upper half and were getting
-    // partially softened back down here, undoing some of CAS's work
-    // right where the user wants it crispest. Genuine low-contrast
-    // shader noise (what this pass exists for) is still well below
-    // 0.02, so that cleanup is untouched.
-    float pull = 1.0 - smoothstep(0.02, 0.045, diff);
-    return mix(result, avg, pull * 0.3);
+    // Shrunk hard from 0.02-0.045 to 0.008-0.02, pull cut from 0.3 to
+    // 0.12: DS background art commonly uses deliberate per-pixel
+    // dithering to fake extra colour depth (checkerboard-style
+    // alternation, not smooth gradients) - the previous window was
+    // wide/strong enough to read that dithering as "shader noise" and
+    // blur it into a flat smear (visible as one screen looking mushy
+    // while a mostly-flat-colour screen next to it looked fine). This
+    // narrower window only mops up genuinely tiny differences left by
+    // the earlier stages, which is what this pass was meant for in the
+    // first place - real dithering sits above it and survives intact.
+    float pull = 1.0 - smoothstep(0.008, 0.02, diff);
+    return mix(result, avg, pull * 0.12);
 }
 
 // Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
