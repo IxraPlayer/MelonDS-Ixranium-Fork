@@ -3100,13 +3100,17 @@ void MainWindow::applyOptimizedGraphics3D()
     // higher-quality polygon rasteriser, but don't downgrade a value
     // the user already set higher manually.
     //
-    // Forced to 1x (native), full stop: any factor above 1x changes the
-    // composited framebuffer resolution the 2D screen shader
-    // (main_shaders.h) operates on, which breaks the quality tuning
-    // done there - so Optimized Graphics has to stay at native
-    // resolution on the 3D side, even though that means living with
-    // unsmoothed 3D polygon edges for now.
-    globalCfg.SetInt("3D.GL.ScaleFactor", 1);
+    // Forced to 2x: confirmed 6x fixes 3D model jaggies but is too
+    // heavy (quadratic cost), and the FXAA post-process alternative
+    // corrupted scenes that use the 3D engine for backgrounds/effects
+    // even after several attempted fixes - removed entirely (see
+    // GPU3D_OpenGL.cpp/.h, 3DFXAA*.glsl deleted). 2x supersampling is
+    // the agreed middle ground: noticeably smoother than native 1x,
+    // ~9x cheaper than 6x. The 2D screen shader's neighbour-sampling
+    // math (main_shaders.h) now scales its texel steps with this same
+    // factor via uPixelScale, so it stays correctly tuned instead of
+    // breaking the way it did when scale was raised without that fix.
+    globalCfg.SetInt("3D.GL.ScaleFactor", 2);
     globalCfg.SetBool("3D.GL.BetterPolygons", true);
 
     // Perspective-correct hi-res vertex coordinates: defaults on, but a
@@ -3123,6 +3127,11 @@ void MainWindow::applyOptimizedGraphics3D()
     bool glchangeNeeded = (old_gl != new_gl);
 
     onUpdateVideoSettings(glchangeNeeded);
+
+    // Tell the 2D screen shader the same scale it's now compositing
+    // at, so its neighbour-sampling steps match (see uPixelScale in
+    // main_shaders.h / Screen.cpp).
+    panel->setPixelScale(globalCfg.GetInt("3D.GL.ScaleFactor"));
 }
 
 void MainWindow::onChangeSharpUpscale(bool checked)

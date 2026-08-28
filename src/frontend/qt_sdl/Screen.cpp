@@ -137,6 +137,14 @@ void ScreenPanel::loadConfig()
     screenSizing = cfg.GetInt("ScreenSizing");
     screenFocused = cfg.GetBool("ScreenFocused");
     sharpUpscale = cfg.GetBool("SharpUpscale");
+    // 3D.GL.ScaleFactor lives in global config, not window config - see
+    // Window.cpp (applyOptimizedGraphics3D). The 2D compositor's output
+    // texture is rendered at this same scale (GPU2D_OpenGL.cpp uses the
+    // identical "scale" value), so the sharpening shader needs to know
+    // it to convert its native-pixel neighbour offsets into the right
+    // number of texels at runtime (see uPixelScale in main_shaders.h).
+    pixelScale = mainWindow->getGlobalConfig().GetInt("3D.GL.ScaleFactor");
+    if (pixelScale < 1) pixelScale = 1;
     integerScaling = cfg.GetBool("IntegerScaling");
     screenAspectTop = cfg.GetInt("ScreenAspectTop");
     screenAspectBot = cfg.GetInt("ScreenAspectBot");
@@ -1157,6 +1165,7 @@ void ScreenPanelGL::initOpenGL()
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
     screenShaderSharpUpscaleULoc = glGetUniformLocation(screenShaderProgram, "uSharpUpscale");
+    screenShaderPixelScaleULoc = glGetUniformLocation(screenShaderProgram, "uPixelScale");
 
     const float vertices[] =
     {
@@ -1378,6 +1387,7 @@ void ScreenPanelGL::drawScreen()
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
         glUniform1i(screenShaderSharpUpscaleULoc, sharpUpscale ? 1 : 0);
+        glUniform1i(screenShaderPixelScaleULoc, pixelScale > 0 ? pixelScale : 1);
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))

@@ -60,6 +60,7 @@ public:
 
     EmuInstance* getEmuInstance() { return emuInstance; }
     Config::Table& getWindowConfig() { return windowCfg; }
+    Config::Table& getGlobalConfig() { return globalCfg; }
     int getWindowID() { return windowID; }
 
     bool winHasMenu() { return hasMenu; }

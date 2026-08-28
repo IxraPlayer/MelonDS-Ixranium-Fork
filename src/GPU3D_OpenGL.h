@@ -105,14 +105,6 @@ private:
     GLuint FinalPassEdgeShader {};
     GLuint FinalPassFogShader {};
 
-    // Post-process FXAA pass for the 3D layer (see 3DFXAAFS.glsl) -
-    // covers polygon-edge antialiasing at native (1x) internal
-    // resolution, since Optimized Graphics no longer uses ScaleFactor
-    // supersampling for that (too expensive - see Window.cpp).
-    GLuint FXAAShader {};
-    GLuint AAColorTex {};
-    GLuint AAFramebuffer {};
-
     // std140 compliant structure
     struct
     {

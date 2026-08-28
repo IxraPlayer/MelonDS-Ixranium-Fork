@@ -80,6 +80,7 @@ const char* kScreenFS = R"(#version 140
 
 uniform sampler2DArray ScreenTex;
 uniform int uSharpUpscale;
+uniform int uPixelScale;
 
 smooth in vec3 fTexcoord;
 
@@ -88,6 +89,25 @@ out vec4 oColor;
 float luma(vec3 c)
 {
     return dot(c, vec3(0.299, 0.587, 0.114));
+}
+
+// All the edge/sharpen stages below were written assuming one texel ==
+// one native NDS pixel (via textureOffset's compile-time-constant
+// ivec2 steps). That assumption silently broke the moment the 2D
+// compositor's output texture itself got rendered at a supersampled
+// size (GPU2D_OpenGL's ScreenW/H uses the same GL_ScaleFactor as the
+// 3D renderer) - at 2x, one textureOffset step was only half a native
+// pixel, so every stage was reading/blending at the wrong granularity
+// and the tuning done at 1x stopped applying correctly. uPixelScale
+// (set from the same GL_ScaleFactor) turns that fixed 1-texel step
+// into a runtime step of uPixelScale texels, so the exact same
+// algorithm/tuning holds regardless of internal resolution.
+// textureOffset() itself can't take a runtime offset (GLSL requires a
+// compile-time constant there), so every call below now goes through
+// this helper instead.
+vec3 texN(sampler2DArray tex, vec3 uv, vec2 offset, vec2 stepUV)
+{
+    return texture(tex, vec3(uv.xy + offset * stepUV, uv.z)).rgb;
 }
 
 // Stage 0: diagonal reconnection (Eagle/2xSaI-style). xBR's corner
@@ -99,20 +119,20 @@ float luma(vec3 c)
 // blend only partially smooths. If both pixels flanking a corner agree
 // with the diagonal pixel (and the centre is the odd one out), that's a
 // real diagonal line passing through - pull the centre towards it.
-vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize)
+vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize, vec2 stepUV)
 {
     vec2 pixelPos = uv.xy * texSize;
-    vec2 subpix = fract(pixelPos);
+    vec2 subpix = fract(pixelPos / float(uPixelScale)) ;
 
-    vec3 c  = textureOffset(tex, uv, ivec2( 0,  0)).rgb;
-    vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
-    vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
-    vec3 w  = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
-    vec3 e  = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
-    vec3 nw = textureOffset(tex, uv, ivec2(-1, -1)).rgb;
-    vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
-    vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
-    vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
+    vec3 c  = texN(tex, uv, vec2( 0,  0), stepUV);
+    vec3 n  = texN(tex, uv, vec2( 0, -1), stepUV);
+    vec3 s  = texN(tex, uv, vec2( 0,  1), stepUV);
+    vec3 w  = texN(tex, uv, vec2(-1,  0), stepUV);
+    vec3 e  = texN(tex, uv, vec2( 1,  0), stepUV);
+    vec3 nw = texN(tex, uv, vec2(-1, -1), stepUV);
+    vec3 ne = texN(tex, uv, vec2( 1, -1), stepUV);
+    vec3 sw = texN(tex, uv, vec2(-1,  1), stepUV);
+    vec3 se = texN(tex, uv, vec2( 1,  1), stepUV);
 
     bvec2 q = greaterThanEqual(subpix, vec2(0.5));
 
@@ -142,20 +162,20 @@ vec3 diagonalReconnect(sampler2DArray tex, vec3 uv, vec2 texSize)
 // Stage 1: xBR-style edge-directed corner blend. Takes the diagonally-
 // reconnected colour from Stage 0 as its centre sample so the two
 // stages compound instead of Stage 1 overwriting Stage 0's work.
-vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize, vec3 center)
+vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize, vec3 center, vec2 stepUV)
 {
     vec2 pixelPos = uv.xy * texSize;
-    vec2 subpix = fract(pixelPos);
+    vec2 subpix = fract(pixelPos / float(uPixelScale));
 
     vec3 c  = center;
-    vec3 n  = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
-    vec3 s  = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
-    vec3 w  = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
-    vec3 e  = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
-    vec3 nw = textureOffset(tex, uv, ivec2(-1, -1)).rgb;
-    vec3 ne = textureOffset(tex, uv, ivec2( 1, -1)).rgb;
-    vec3 sw = textureOffset(tex, uv, ivec2(-1,  1)).rgb;
-    vec3 se = textureOffset(tex, uv, ivec2( 1,  1)).rgb;
+    vec3 n  = texN(tex, uv, vec2( 0, -1), stepUV);
+    vec3 s  = texN(tex, uv, vec2( 0,  1), stepUV);
+    vec3 w  = texN(tex, uv, vec2(-1,  0), stepUV);
+    vec3 e  = texN(tex, uv, vec2( 1,  0), stepUV);
+    vec3 nw = texN(tex, uv, vec2(-1, -1), stepUV);
+    vec3 ne = texN(tex, uv, vec2( 1, -1), stepUV);
+    vec3 sw = texN(tex, uv, vec2(-1,  1), stepUV);
+    vec3 se = texN(tex, uv, vec2( 1,  1), stepUV);
 
     float lc = luma(c), ln = luma(n), ls = luma(s), lw = luma(w), le = luma(e);
     float lnw = luma(nw), lne = luma(ne), lsw = luma(sw), lse = luma(se);
@@ -206,13 +226,13 @@ vec3 edgeUpscale(sampler2DArray tex, vec3 uv, vec2 texSize, vec3 center)
 // Takes the edge-blended colour as its centre sample (rather than the
 // raw texel) so the sharpen is applied on top of stage 1's result
 // instead of being computed independently and then diluted against it.
-vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
+vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center, vec2 stepUV)
 {
-    vec3 a = textureOffset(tex, uv, ivec2( 0, -1)).rgb; // N
-    vec3 b = textureOffset(tex, uv, ivec2(-1,  0)).rgb; // W
+    vec3 a = texN(tex, uv, vec2( 0, -1), stepUV); // N
+    vec3 b = texN(tex, uv, vec2(-1,  0), stepUV); // W
     vec3 e = center;
-    vec3 f = textureOffset(tex, uv, ivec2( 1,  0)).rgb; // E
-    vec3 g = textureOffset(tex, uv, ivec2( 0,  1)).rgb; // S
+    vec3 f = texN(tex, uv, vec2( 1,  0), stepUV); // E
+    vec3 g = texN(tex, uv, vec2( 0,  1), stepUV); // S
 
     vec3 mn = min(min(min(a, b), min(f, g)), e);
     vec3 mx = max(max(max(a, b), max(f, g)), e);
@@ -252,12 +272,12 @@ vec3 casSharpen(sampler2DArray tex, vec3 uv, vec3 center)
 // neighbourhood average: genuine edges/detail (a big difference from
 // the average) are left completely alone, so this can't flatten real
 // artwork into a flat "plastic" look - it only mops up what's left.
-vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
+vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result, vec2 stepUV)
 {
-    vec3 n = textureOffset(tex, uv, ivec2( 0, -1)).rgb;
-    vec3 s = textureOffset(tex, uv, ivec2( 0,  1)).rgb;
-    vec3 w = textureOffset(tex, uv, ivec2(-1,  0)).rgb;
-    vec3 e = textureOffset(tex, uv, ivec2( 1,  0)).rgb;
+    vec3 n = texN(tex, uv, vec2( 0, -1), stepUV);
+    vec3 s = texN(tex, uv, vec2( 0,  1), stepUV);
+    vec3 w = texN(tex, uv, vec2(-1,  0), stepUV);
+    vec3 e = texN(tex, uv, vec2( 1,  0), stepUV);
     vec3 avg = (n + s + w + e) * 0.25;
 
     float diff = distance(result, avg);
@@ -278,16 +298,16 @@ vec3 cleanupPass(sampler2DArray tex, vec3 uv, vec3 result)
 // Runs the full diagonal-reconnect -> edge-upscale -> CAS -> cleanup
 // pipeline for one texcoord. Factored out of main() so it can be
 // evaluated at several sub-pixel offsets below instead of once.
-vec3 processPixel(vec3 uv, vec2 texSize)
+vec3 processPixel(vec3 uv, vec2 texSize, vec2 stepUV)
 {
-    vec3 reconnected = diagonalReconnect(ScreenTex, uv, texSize);
-    vec3 edged = edgeUpscale(ScreenTex, uv, texSize, reconnected);
+    vec3 reconnected = diagonalReconnect(ScreenTex, uv, texSize, stepUV);
+    vec3 edged = edgeUpscale(ScreenTex, uv, texSize, reconnected, stepUV);
     // CAS runs on top of the edge-blended result, not averaged
     // against a separately-computed raw-source sharpen - that's
     // what makes both stages actually visible together instead of
     // each cancelling half of the other out.
-    vec3 sharpened = casSharpen(ScreenTex, uv, edged);
-    return cleanupPass(ScreenTex, uv, sharpened);
+    vec3 sharpened = casSharpen(ScreenTex, uv, edged, stepUV);
+    return cleanupPass(ScreenTex, uv, sharpened, stepUV);
 }
 
 void main()
@@ -296,6 +316,12 @@ void main()
     if (uSharpUpscale != 0)
     {
         vec2 texSize = vec2(textureSize(ScreenTex, 0).xy);
+        // One native-NDS-pixel step in UV space, scaled by however
+        // many texels-per-native-pixel the compositor is currently
+        // rendering at (see uPixelScale comment up top) - this is what
+        // makes the whole algorithm resolution-independent instead of
+        // silently assuming 1x.
+        vec2 stepUV = float(uPixelScale) / texSize;
 
         // 2x2 supersampling on top of the algorithm above: each of the
         // four stages is itself continuous/smoothstep-based (see their
@@ -308,10 +334,10 @@ void main()
         // UV space, so the four taps stay exactly one output-pixel
         // apart regardless of window/upscale size.
         vec2 duv = fwidth(fTexcoord.xy) * 0.25;
-        vec3 s0 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x, -duv.y), fTexcoord.z), texSize);
-        vec3 s1 = processPixel(vec3(fTexcoord.xy + vec2( duv.x, -duv.y), fTexcoord.z), texSize);
-        vec3 s2 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x,  duv.y), fTexcoord.z), texSize);
-        vec3 s3 = processPixel(vec3(fTexcoord.xy + vec2( duv.x,  duv.y), fTexcoord.z), texSize);
+        vec3 s0 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
+        vec3 s1 = processPixel(vec3(fTexcoord.xy + vec2( duv.x, -duv.y), fTexcoord.z), texSize, stepUV);
+        vec3 s2 = processPixel(vec3(fTexcoord.xy + vec2(-duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
+        vec3 s3 = processPixel(vec3(fTexcoord.xy + vec2( duv.x,  duv.y), fTexcoord.z), texSize, stepUV);
         rgb = (s0 + s1 + s2 + s3) * 0.25;
     }
     else

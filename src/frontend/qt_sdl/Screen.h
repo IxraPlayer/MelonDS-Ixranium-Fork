@@ -61,6 +61,7 @@ public:
 
     void setFilter(bool filter);
     void setSharpUpscale(bool enable) { sharpUpscale = enable; update(); }
+    void setPixelScale(int scale) { pixelScale = scale; update(); }
 
     void setMouseHide(bool enable, int delay);
 
@@ -123,6 +124,7 @@ protected:
     int screenSizing;
     bool screenFocused;
     bool sharpUpscale = false;
+    int pixelScale = 1;
     bool integerScaling;
     int screenAspectTop, screenAspectBot;
 
@@ -315,6 +317,7 @@ private:
     GLuint screenShaderProgram;
     GLint screenShaderTransformULoc, screenShaderScreenSizeULoc;
     GLint screenShaderSharpUpscaleULoc;
+    GLint screenShaderPixelScaleULoc;
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;
