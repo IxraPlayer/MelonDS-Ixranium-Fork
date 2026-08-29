@@ -37,6 +37,52 @@ namespace melonDS
 // which recreates the Texcache (and therefore this) from empty.
 inline std::atomic<bool> IxraniumTexUpscaleEnabled{false};
 
+// Scale3x (a.k.a. the 3x extension of the Eagle/Scale2x family): same
+// copy-only, equality-test-based approach as EagleUpscale2x below - no
+// colour blending anywhere, so it still can't introduce a colour that
+// wasn't already in the original texture. Produces a 3x3 output block
+// per source pixel instead of 2x2; the middle row/column additionally
+// gets to inherit a neighbour's colour (not just the four corners),
+// which is what catches a few more diagonal edges than the 2x version.
+inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
+{
+    u32 dstW = srcW * 3;
+
+    auto at = [&](u32 x, u32 y) -> u32
+    {
+        if (x >= srcW) x = srcW - 1;
+        if (y >= srcH) y = srcH - 1;
+        return src[y * srcW + x];
+    };
+
+    for (u32 y = 0; y < srcH; y++)
+    {
+        for (u32 x = 0; x < srcW; x++)
+        {
+            u32 A = at(x-1, y-1), B = at(x, y-1), C = at(x+1, y-1);
+            u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
+            u32 G = at(x-1, y+1), H = at(x, y+1), I = at(x+1, y+1);
+
+            u32 E0 = (D==B && D!=H && B!=F) ? D : E;
+            u32 E1 = ((D==B && D!=H && B!=F && E!=C) || (B==F && B!=D && F!=H && E!=A)) ? B : E;
+            u32 E2 = (B==F && B!=D && F!=H) ? F : E;
+            u32 E3 = ((D==B && D!=H && B!=F && E!=G) || (D==H && D!=B && H!=F && E!=A)) ? D : E;
+            u32 E4 = E;
+            u32 E5 = ((B==F && B!=D && F!=H && E!=I) || (F==H && F!=B && H!=D && E!=C)) ? F : E;
+            u32 E6 = (D==H && D!=B && H!=F) ? D : E;
+            u32 E7 = ((D==H && D!=B && H!=F && E!=I) || (H==F && H!=D && F!=B && E!=G)) ? H : E;
+            u32 E8 = (H==F && H!=D && F!=B) ? F : E;
+
+            u32* row0 = dst + (y*3+0) * dstW + (x*3);
+            u32* row1 = dst + (y*3+1) * dstW + (x*3);
+            u32* row2 = dst + (y*3+2) * dstW + (x*3);
+            row0[0] = E0; row0[1] = E1; row0[2] = E2;
+            row1[0] = E3; row1[1] = E4; row1[2] = E5;
+            row2[0] = E6; row2[1] = E7; row2[2] = E8;
+        }
+    }
+}
+
 // Classic "Eagle" 2x upscale: for each source pixel, each of the four
 // output sub-pixels either copies the centre pixel or one diagonal
 // neighbour, chosen by simple equality tests - never blends/averages
@@ -338,7 +384,7 @@ public:
             entry.TexPalHash = MaskedHash(GPU.VRAMFlat_TexPal, sizeof(GPU.VRAMFlat_TexPal),
                 entry.TexPalStart, entry.TexPalSize);
 
-        // "Ixranium Graphics": upscale the just-decoded texel data 2x
+        // "Ixranium Graphics": upscale the just-decoded texel data 3x
         // before it goes anywhere near the GPU or the array-bucket
         // system below. uploadW/uploadH/uploadData (not width/height/
         // DecodingBuffer) are what the rest of this function actually
@@ -349,9 +395,9 @@ public:
         u32* uploadData = DecodingBuffer;
         if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
         {
-            EagleUpscale2x(DecodingBuffer, width, height, UpscaleBuffer);
-            uploadW = width * 2;
-            uploadH = height * 2;
+            EagleUpscale3x(DecodingBuffer, width, height, UpscaleBuffer);
+            uploadW = width * 3;
+            uploadH = height * 3;
             uploadData = UpscaleBuffer;
         }
 
@@ -432,10 +478,10 @@ private:
     std::vector<TexHandleT> TexArrays[8][8];
 
     u32 DecodingBuffer[1024*1024];
-    // Scratch space for the 2x-upscaled copy (see EagleUpscale2x / the
+    // Scratch space for the 3x-upscaled copy (see EagleUpscale3x / the
     // IxraniumTexUpscaleEnabled check in GetTexture). Sized for the
-    // largest possible DS texture (1024x1024) upscaled 2x on each axis.
-    u32 UpscaleBuffer[2048*2048];
+    // largest possible DS texture (1024x1024) upscaled 3x on each axis.
+    u32 UpscaleBuffer[3072*3072];
 };
 
 }
