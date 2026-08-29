@@ -5,6 +5,7 @@
 #include "GPU.h"
 
 #include <assert.h>
+#include <atomic>
 #include <unordered_map>
 #include <vector>
 
@@ -13,6 +14,74 @@
 
 namespace melonDS
 {
+
+// "Ixranium Graphics": toggled from the UI (see Window.cpp's hamburger
+// menu). Deliberately scoped to ONLY this texture-decode step - it
+// changes the pixel data that gets uploaded as a game's textures,
+// nothing about how the already-rendered 3D scene or the final screen
+// image gets processed afterwards (no post-process pass exists here at
+// all), which is what keeps this from affecting perceived depth/3D the
+// way a screen-space filter can.
+//
+// A plain global rather than a per-renderer member: Texcache is a
+// header-only template instantiated separately for the OpenGL and
+// Compute renderers (see GPU3D_TexcacheOpenGL.h / GPU3D_Compute.h), and
+// this setting should apply identically to both without duplicating a
+// setter through each one.
+//
+// Toggling this at runtime changes the *physical pixel dimensions* of
+// every texture uploaded afterwards, so anything already cached at the
+// old dimensions must not be mixed with newly-uploaded ones under the
+// same size bucket (see TexArrays in Texcache below) - Window.cpp's
+// toggle handler forces a full renderer reinit when this changes,
+// which recreates the Texcache (and therefore this) from empty.
+inline std::atomic<bool> IxraniumTexUpscaleEnabled{false};
+
+// Classic "Eagle" 2x upscale: for each source pixel, each of the four
+// output sub-pixels either copies the centre pixel or one diagonal
+// neighbour, chosen by simple equality tests - never blends/averages
+// colour values. That's deliberate: this only ever copies pixel values
+// that already exist in the source texture, so it can't introduce a
+// colour that wasn't already somewhere in the original artwork, and it
+// works on the raw packed RGBA8 texel (u32) directly - no need to
+// unpack channels, so it's agnostic to whichever of RGB6A5/RGBA8/BGRA8
+// the decode step above produced.
+inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
+{
+    u32 dstW = srcW * 2;
+
+    auto at = [&](u32 x, u32 y) -> u32
+    {
+        // Clamp to edge - there is no pixel outside the texture, and
+        // clamping (rather than wrapping) matches how the texture's own
+        // edges already look, so it never invents a fake seam.
+        if (x >= srcW) x = srcW - 1;
+        if (y >= srcH) y = srcH - 1;
+        return src[y * srcW + x];
+    };
+
+    for (u32 y = 0; y < srcH; y++)
+    {
+        for (u32 x = 0; x < srcW; x++)
+        {
+            u32 A = at(x-1, y-1), B = at(x, y-1), C = at(x+1, y-1);
+            u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
+            u32 G = at(x-1, y+1), H = at(x, y+1), I = at(x+1, y+1);
+            (void)A; (void)C; (void)G; (void)I; // unused corners of the 3x3 window, kept for clarity of the pattern above
+
+            u32 topLeft     = (D == B && D != H && B != F) ? D : E;
+            u32 topRight    = (B == F && B != D && F != H) ? F : E;
+            u32 bottomLeft  = (H == D && H != F && D != B) ? D : E;
+            u32 bottomRight = (F == H && F != B && H != D) ? H : E;
+
+            u32* out = dst + (y*2) * dstW + (x*2);
+            out[0] = topLeft;
+            out[1] = topRight;
+            out[dstW + 0] = bottomLeft;
+            out[dstW + 1] = bottomRight;
+        }
+    }
+}
 
 inline u32 TextureWidth(u32 texparam)
 {
@@ -269,6 +338,23 @@ public:
             entry.TexPalHash = MaskedHash(GPU.VRAMFlat_TexPal, sizeof(GPU.VRAMFlat_TexPal),
                 entry.TexPalStart, entry.TexPalSize);
 
+        // "Ixranium Graphics": upscale the just-decoded texel data 2x
+        // before it goes anywhere near the GPU or the array-bucket
+        // system below. uploadW/uploadH/uploadData (not width/height/
+        // DecodingBuffer) are what the rest of this function actually
+        // stores and uploads from here on - width/height above stay
+        // exactly as they were for the VRAM-address decode math, which
+        // must stay tied to the DS's real, native texture dimensions.
+        u32 uploadW = width, uploadH = height;
+        u32* uploadData = DecodingBuffer;
+        if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
+        {
+            EagleUpscale2x(DecodingBuffer, width, height, UpscaleBuffer);
+            uploadW = width * 2;
+            uploadH = height * 2;
+            uploadData = UpscaleBuffer;
+        }
+
         auto& texArrays = TexArrays[widthLog2][heightLog2];
         auto& freeTextures = FreeTextures[widthLog2][heightLog2];
 
@@ -277,11 +363,11 @@ public:
             texArrays.resize(texArrays.size()+1);
             TexHandleT& array = texArrays[texArrays.size()-1];
 
-            u32 layers = std::min<u32>((8*1024*1024) / (width*height*4), 64);
+            u32 layers = std::min<u32>((8*1024*1024) / (uploadW*uploadH*4), 64);
 
             // allocate new array texture
-            //printf("allocating new layer set for %d %d %d %d\n", width, height, texArrays.size()-1, array.ImageDescriptor);
-            array = TexLoader.GenerateTexture(width, height, layers);
+            //printf("allocating new layer set for %d %d %d %d\n", uploadW, uploadH, texArrays.size()-1, array.ImageDescriptor);
+            array = TexLoader.GenerateTexture(uploadW, uploadH, layers);
 
             for (u32 i = 0; i < layers; i++)
             {
@@ -294,8 +380,8 @@ public:
 
         entry.Texture = storagePlace;
 
-        TexLoader.UploadTexture(storagePlace.TextureID, width, height, storagePlace.Layer, DecodingBuffer);
-        //printf("using storage place %d %d | %d %d (%d)\n", width, height, storagePlace.TexArrayIdx, storagePlace.LayerIdx, array.ImageDescriptor);
+        TexLoader.UploadTexture(storagePlace.TextureID, uploadW, uploadH, storagePlace.Layer, uploadData);
+        //printf("using storage place %d %d | %d %d (%d)\n", uploadW, uploadH, storagePlace.TexArrayIdx, storagePlace.LayerIdx, array.ImageDescriptor);
 
         textureHandle = storagePlace.TextureID;
         layer = storagePlace.Layer;
@@ -346,6 +432,10 @@ private:
     std::vector<TexHandleT> TexArrays[8][8];
 
     u32 DecodingBuffer[1024*1024];
+    // Scratch space for the 2x-upscaled copy (see EagleUpscale2x / the
+    // IxraniumTexUpscaleEnabled check in GetTexture). Sized for the
+    // largest possible DS texture (1024x1024) upscaled 2x on each axis.
+    u32 UpscaleBuffer[2048*2048];
 };
 
 }

@@ -100,6 +100,7 @@ DefaultList<bool> DefaultBools =
     {"Screen.Filter", true},
     {"3D.Soft.Threaded", true},
     {"3D.GL.HiresCoordinates", true},
+    {"3D.IxraniumTexUpscale", false},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
     {"Instance*.Window*.ShowKeyboardPreview", false},
@@ -228,6 +229,7 @@ LegacyEntry LegacyFile[] =
     {"GL_ScaleFactor", 0, "3D.GL.ScaleFactor", false},
     {"GL_BetterPolygons", 1, "3D.GL.BetterPolygons", false},
     {"GL_HiresCoordinates", 1, "3D.GL.HiresCoordinates", false},
+    {"IxraniumTexUpscale", 1, "3D.IxraniumTexUpscale", false},
 
     {"LimitFPS", 1, "LimitFPS", false},
     {"MaxFPS", 0, "MaxFPS", false},

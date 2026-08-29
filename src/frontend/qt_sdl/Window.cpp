@@ -17,6 +17,7 @@
 */
 
 #include "NDS.h"
+#include "GPU3D_Texcache.h"
 #include <stdlib.h>
 #include <time.h>
 #include <stdio.h>
@@ -765,6 +766,18 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actShowKeyboardPreview = hamburgerMenu->addAction(tr("Show keyboard preview"));
             actShowKeyboardPreview->setCheckable(true);
             connect(actShowKeyboardPreview, &QAction::triggered, this, &MainWindow::onChangeShowKeyboardPreview);
+
+            hamburgerMenu->addSeparator();
+
+            // Texture-level 2x upscale (see GPU3D_Texcache.h /
+            // EagleUpscale2x) - deliberately NOT a screen/post-process
+            // effect, so it can't distort perceived 3D depth the way
+            // the earlier screen-space "Optimized Graphics" attempt did
+            // (see that feature's removal earlier in this project).
+            actIxraniumGraphics = hamburgerMenu->addAction(tr("Ixranium Graphics"));
+            actIxraniumGraphics->setCheckable(true);
+            connect(actIxraniumGraphics, &QAction::triggered, this, &MainWindow::onChangeIxraniumGraphics);
+
             this->hamburgerMenu = hamburgerMenu;
         }
         {
@@ -1029,6 +1042,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
         actShowOSD->setChecked(showOSD);
         actShowKeyboardPreview->setChecked(showKeyboardPreview);
+
+        // Restore Ixranium Graphics' checked state and make the actual
+        // core-side flag match it - setChecked() alone doesn't emit
+        // triggered(), so without this explicit sync the texture
+        // upscale would silently stay off after a restart even with the
+        // checkbox showing checked, until manually re-toggled.
+        bool ixraniumGraphicsOn = globalCfg.GetBool("3D.IxraniumTexUpscale");
+        actIxraniumGraphics->setChecked(ixraniumGraphicsOn);
+        melonDS::IxraniumTexUpscaleEnabled = ixraniumGraphicsOn;
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
         actAudioSync->setChecked(emuInstance->doAudioSync);
@@ -3105,6 +3127,24 @@ void MainWindow::onChangeLimitFramerate(bool checked)
 {
     emuInstance->doLimitFPS = checked;
     globalCfg.SetBool("LimitFPS", emuInstance->doLimitFPS);
+}
+
+void MainWindow::onChangeIxraniumGraphics(bool checked)
+{
+    globalCfg.SetBool("3D.IxraniumTexUpscale", checked);
+    melonDS::IxraniumTexUpscaleEnabled = checked;
+
+    // Every already-cached texture on the GPU is still at whatever
+    // resolution it was uploaded at under the OLD setting - the array-
+    // bucket storage in Texcache (GPU3D_Texcache.h) assumes every
+    // texture sharing a size bucket has the same physical pixel
+    // dimensions, so leaving old- and new-scale textures mixed together
+    // would corrupt that storage rather than just looking wrong. Forcing
+    // a full renderer reinit (same path already used for a 3D-renderer
+    // change) throws away and recreates the Texcache from empty, so
+    // everything gets re-decoded fresh at the new setting - simpler and
+    // safer than reaching in to selectively invalidate it.
+    onUpdateVideoSettings(true);
 }
 
 void MainWindow::onChangeAudioSync(bool checked)
