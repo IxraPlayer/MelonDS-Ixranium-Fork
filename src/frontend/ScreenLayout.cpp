@@ -154,7 +154,13 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
 
         M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(TopScreenMtx, mainScale);
-        M23_Translate(TopScreenMtx, screenWidth/2.f, screenHeight/2.f);
+        // Shifted left just enough that its right edge touches the small
+        // screen's left edge, instead of sitting dead-centre in the full
+        // window - that's what stops the two from overlapping in the
+        // corner where the small screen sits.
+        float smallWPreview = screenWidth * 0.22f; // matches the small-screen calc below
+        float mainCentreX = screenWidth - smallWPreview - (mainScale*256.f)/2.f;
+        M23_Translate(TopScreenMtx, mainCentreX, screenHeight/2.f);
 
         // Small screen: a fixed-proportion corner overlay (~22% of the
         // window's width), docked flush into the top-right corner of
