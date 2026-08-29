@@ -129,6 +129,87 @@ inline u32 BlendColors(u32 a, u32 b, float t)
 inline constexpr float kCornerBlend = 0.85f;
 inline constexpr float kEdgeBlend = 0.45f;
 
+// 4x, single-pass (NOT 2x applied twice - see the "why 4x is risky"
+// discussion this came out of: re-applying 2x compounds whatever small
+// mismatches the first pass made into the second, on top of costing 16x
+// the native pixel count for no reason beyond a texture already 4x'd
+// once). This one-pass version costs the same 16x either way, but
+// starts from the original, undistorted native pixels every time.
+//
+// Same corner/no-corner detection as EagleUpscale3x (D==B etc.) - what's
+// different is the output block is 4x4 (16 cells) instead of 3x3 (9),
+// which gives three full graduated steps within each corner's own
+// quadrant instead of two: the true corner cell (kTier0, strongest),
+// then the two cells one step away along each axis (kTier1), then the
+// single cell two steps away, diagonally furthest from the corner
+// within its quadrant (kTier2, weakest - closest to unchanged). Each of
+// the four 2x2... rather 2-cell-deep quadrants is entirely independent,
+// driven only by its own corner condition, so there's no shared/OR'd
+// condition to reconcile the way EagleUpscale3x's edge cells needed.
+inline constexpr float kTier0 = 0.90f; // the actual corner cell
+inline constexpr float kTier1 = 0.55f; // one step away (two cells)
+inline constexpr float kTier2 = 0.20f; // two steps away (one cell, deepest into the quadrant)
+
+inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
+{
+    u32 dstW = srcW * 4;
+
+    auto at = [&](u32 x, u32 y) -> u32
+    {
+        if (x >= srcW) x = srcW - 1;
+        if (y >= srcH) y = srcH - 1;
+        return src[y * srcW + x];
+    };
+    auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
+
+    const float tiers[3] = { kTier0, kTier1, kTier2 };
+
+    // Fills one 2x2 quadrant of the 4x4 output block. (cellRow, cellCol)
+    // is the quadrant's position within the block (0 or 1 for top/left
+    // vs bottom/right); (cornerRow, cornerCol) is which of that
+    // quadrant's own two rows/cols is the side the true corner sits on
+    // (0 = top/left side of the quadrant, 1 = bottom/right side) - e.g.
+    // the top-left block quadrant's corner sits at its own local (0,0).
+    auto fillQuadrant = [&](u32* dstBase, bool active, u32 neighbor, u32 centre,
+                             int cornerRow, int cornerCol)
+    {
+        for (int lr = 0; lr < 2; lr++)
+        {
+            for (int lc = 0; lc < 2; lc++)
+            {
+                u32 out = centre;
+                if (active)
+                {
+                    int dist = std::abs(lr - cornerRow) + std::abs(lc - cornerCol);
+                    out = BlendColors(centre, neighbor, tiers[dist]);
+                }
+                dstBase[lr * dstW + lc] = out;
+            }
+        }
+    };
+
+    for (u32 y = 0; y < srcH; y++)
+    {
+        for (u32 x = 0; x < srcW; x++)
+        {
+            u32 B = at(x, y-1);
+            u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
+            u32 H = at(x, y+1);
+
+            bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F);
+            bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H);
+            bool condBL = Close(D,H) && !Close(D,B) && !Close(H,F);
+            bool condBR = Close(H,F) && !Close(H,D) && !Close(F,B);
+
+            u32* block = dst + (y*4) * dstW + (x*4);
+            fillQuadrant(block,                    condTL, D, E, 0, 0); // top-left quadrant, corner at its own (0,0)
+            fillQuadrant(block + 2,                 condTR, F, E, 0, 1); // top-right quadrant, corner at its own (0,1)
+            fillQuadrant(block + 2*dstW,             condBL, D, E, 1, 0); // bottom-left quadrant, corner at its own (1,0)
+            fillQuadrant(block + 2*dstW + 2,          condBR, F, E, 1, 1); // bottom-right quadrant, corner at its own (1,1)
+        }
+    }
+}
+
 inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
 {
     u32 dstW = srcW * 3;
@@ -596,9 +677,9 @@ public:
         u32* uploadData = DecodingBuffer;
         if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
         {
-            EagleUpscale3x(DecodingBuffer, width, height, UpscaleBuffer);
-            uploadW = width * 3;
-            uploadH = height * 3;
+            EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
+            uploadW = width * 4;
+            uploadH = height * 4;
             uploadData = UpscaleBuffer;
 
             // Sharpening always runs immediately after (never before -
@@ -697,14 +778,17 @@ private:
     // Scratch space for the 3x-upscaled copy (see EagleUpscale3x / the
     // IxraniumTexUpscaleEnabled check in GetTexture). Sized for the
     // largest possible DS texture (1024x1024) upscaled 3x on each axis.
-    u32 UpscaleBuffer[3072*3072];
+    // Scratch space for the 4x-upscaled copy (see EagleUpscale4x / the
+    // IxraniumTexUpscaleEnabled check in GetTexture). Sized for the
+    // largest possible DS texture (1024x1024) upscaled 4x on each axis.
+    u32 UpscaleBuffer[4096*4096];
     // Second scratch buffer for the post-upscale sharpening pass (see
     // TextureSharpen) - needs to be separate from UpscaleBuffer since
     // sharpening reads each pixel's neighbours while writing, which an
     // in-place pass would corrupt (a pixel's neighbour may already have
     // been overwritten with its own sharpened value by the time it's
     // read). Same size as UpscaleBuffer for the same reason.
-    u32 SharpenBuffer[3072*3072];
+    u32 SharpenBuffer[4096*4096];
 };
 
 }
