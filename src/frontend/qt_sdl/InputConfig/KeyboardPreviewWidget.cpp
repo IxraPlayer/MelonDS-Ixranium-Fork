@@ -140,9 +140,15 @@ void KeyboardPreviewWidget::buildLayout()
         addNp("/",   Qt::Key_Slash,   1, 0);
         addNp("*",   Qt::Key_Asterisk,2, 0);
         addNp("7",Qt::Key_7,0,1); addNp("8",Qt::Key_8,1,1); addNp("9",Qt::Key_9,2,1);
-        addNp("-",Qt::Key_Minus,3,0,1,2);
+        // Standard physical numpad shape: "-" is a single-height key on
+        // its own in row 0 (next to Num/  and *), "+" spans rows 1-2,
+        // and Enter spans rows 3-4 - previously "-" wrongly spanned
+        // rows 0-1 *and* "+" spanned rows 2-3, which put "+" and Enter
+        // both in row 3 at the same time, i.e. two keys overlapping on
+        // top of each other (the oversized/merged-looking Enter key).
+        addNp("-",Qt::Key_Minus,3,0,1,1);
         addNp("4",Qt::Key_4,0,2); addNp("5",Qt::Key_5,1,2); addNp("6",Qt::Key_6,2,2);
-        addNp("+",Qt::Key_Plus,3,2,1,2);
+        addNp("+",Qt::Key_Plus,3,1,1,2);
         addNp("1",Qt::Key_1,0,3); addNp("2",Qt::Key_2,1,3); addNp("3",Qt::Key_3,2,3);
         addNp("0",Qt::Key_0,0,4,2,1);
         addNp(".",Qt::Key_Period,2,4);
