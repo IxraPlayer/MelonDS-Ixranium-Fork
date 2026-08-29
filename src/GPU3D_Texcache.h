@@ -78,6 +78,11 @@ inline constexpr u32 kColorTolerance = 2;
 // visible halo around them.
 inline constexpr float kSharpenStrength = 0.3f;
 
+// Saturation boost applied after sharpening (see ApplySaturationBoost).
+// 1.0 = no change; 1.05 = +5%, kept deliberately subtle - this is meant
+// to be barely noticeable on its own, not a stylistic colour-grade.
+inline constexpr float kSaturationBoost = 1.05f;
+
 // Scale3x (a.k.a. the 3x extension of the Eagle/Scale2x family): same
 // copy-only, equality-test-based approach as EagleUpscale2x below - no
 // colour blending anywhere, so it still can't introduce a colour that
@@ -186,6 +191,14 @@ inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
 // (their neighbour average equals themselves, so the push there is
 // zero). Alpha is left untouched - sharpening transparency edges only
 // risks visible fringing on cutout sprites for no readability benefit.
+//
+// Adaptive strength: the push is scaled by how large the local contrast
+// already is (edgeMag below) - a thin, high-contrast line (text/line-
+// art) gets pushed harder than the requested base strength, while a
+// wide, gentle gradient barely gets pushed at all. This is what keeps a
+// strength high enough to make text crisp from also visibly staircasing
+// smooth shading elsewhere, which a single flat strength applied
+// everywhere can't do at the same time.
 inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strength)
 {
     auto at = [&](u32 x, u32 y) -> u32
@@ -197,6 +210,11 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
 
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
     auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
+    auto smoothstepf = [](float lo, float hi, float x) -> float
+    {
+        float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
 
     for (u32 y = 0; y < h; y++)
     {
@@ -205,12 +223,32 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
             u32 c = at(x, y);
             u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
 
+            // Local contrast, in the same 0-255 units as the channels
+            // themselves: the largest single-channel gap between this
+            // pixel and its neighbour average. A thin text stroke on a
+            // flat background produces a large gap here; a soft
+            // gradient produces a small one.
+            int edgeMag = 0;
+            for (int shift = 0; shift < 24; shift += 8)
+            {
+                int cc = channel(c, shift);
+                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                edgeMag = std::max(edgeMag, std::abs(cc - avg));
+            }
+            // Below ~4/255 of contrast: treat as a smooth gradient, cut
+            // the push back to a third of the requested strength. Above
+            // ~28/255: treat as a real edge, boost up to 1.5x the
+            // requested strength. Everywhere in between blends smoothly
+            // - no hard cutoff/visible banding between the two regimes.
+            float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
+            float effectiveStrength = strength * (0.33f + edgeFactor * (1.5f - 0.33f));
+
             u32 out = 0;
             for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha (shift 24)
             {
                 int cc = channel(c, shift);
                 int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                int sharpened = cc + (int)((float)(cc - avg) * strength);
+                int sharpened = cc + (int)((float)(cc - avg) * effectiveStrength);
                 out |= clampByte(sharpened) << shift;
             }
             out |= c & 0xFF000000; // alpha passed through unchanged
@@ -219,6 +257,36 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
         }
     }
 }
+
+// Very light, luma-preserving saturation boost - pushes each channel
+// away from the pixel's own brightness (luma) by a small factor, so a
+// grey/desaturated pixel (channels already close to luma) barely moves
+// while a strongly-coloured pixel gets a gentle nudge further from
+// grey. Preserving luma (rather than just multiplying channels) is what
+// keeps this from also brightening or darkening the image - only the
+// colourfulness changes. In-place: unlike the two passes above, this
+// never reads a neighbouring pixel, so there's no read/write ordering
+// hazard to worry about.
+inline void ApplySaturationBoost(u32* buf, u32 w, u32 h, float factor)
+{
+    auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    auto clampByte = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
+
+    for (u32 i = 0; i < w * h; i++)
+    {
+        u32 c = buf[i];
+        float r = (float)channel(c, 0), g = (float)channel(c, 8), b = (float)channel(c, 16);
+        float luma = 0.299f*r + 0.587f*g + 0.114f*b;
+
+        u32 out = clampByte(luma + (r - luma) * factor)
+                | (clampByte(luma + (g - luma) * factor) << 8)
+                | (clampByte(luma + (b - luma) * factor) << 16)
+                | (c & 0xFF000000); // alpha untouched
+
+        buf[i] = out;
+    }
+}
+
 
 
 inline u32 TextureWidth(u32 texparam)
@@ -497,6 +565,14 @@ public:
             // output - both are part of the one "Ixranium Graphics"
             // toggle rather than a separate switch.
             TextureSharpen(UpscaleBuffer, uploadW, uploadH, SharpenBuffer, kSharpenStrength);
+
+            // Saturation boost last, in-place on the sharpened result -
+            // order doesn't matter relative to sharpening (it doesn't
+            // touch local contrast, sharpening doesn't touch colourfulness)
+            // but running it after means it's nudging the exact colours
+            // that will actually be uploaded.
+            ApplySaturationBoost(SharpenBuffer, uploadW, uploadH, kSaturationBoost);
+
             uploadData = SharpenBuffer;
         }
 
