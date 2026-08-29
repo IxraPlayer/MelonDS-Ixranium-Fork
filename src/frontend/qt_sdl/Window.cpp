@@ -752,10 +752,20 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actShowOSD = menu->addAction(tr("Show OSD"));
             actShowOSD->setCheckable(true);
             connect(actShowOSD, &QAction::triggered, this, &MainWindow::onChangeShowOSD);
-
-            actShowKeyboardPreview = menu->addAction(tr("Show keyboard preview"));
+        }
+        {
+            // "Show keyboard preview" used to live in View, but is now
+            // exposed through the hamburger button pinned to the far
+            // left of the top bar instead (see hamburgerMenu below) -
+            // this QMenu is never shown from the View menu itself, it
+            // just keeps actShowKeyboardPreview's action/shortcut/
+            // checked-state alive the same way every other menu here
+            // does, owned by the (hidden) native menubar.
+            QMenu* hamburgerMenu = new QMenu(this);
+            actShowKeyboardPreview = hamburgerMenu->addAction(tr("Show keyboard preview"));
             actShowKeyboardPreview->setCheckable(true);
             connect(actShowKeyboardPreview, &QAction::triggered, this, &MainWindow::onChangeShowKeyboardPreview);
+            this->hamburgerMenu = hamburgerMenu;
         }
         {
             QMenu * menu = menubar->addMenu(tr("Config"));
@@ -869,6 +879,28 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         topMenuToolBar->setMovable(false);
         topMenuToolBar->setFloatable(false);
         topMenuToolBar->toggleViewAction()->setVisible(false);
+
+        // Hamburger button, pinned to the true far-left edge of the bar -
+        // added to the toolbar BEFORE topMenuBar itself, so it sits
+        // outside (to the left of) topMenuBar's own centred File/System/
+        // View/Config/Help row rather than becoming one more button
+        // inside that centred group. Its dropdown holds "Show keyboard
+        // preview" (moved out of the View menu - see hamburgerMenu,
+        // built alongside the other menus above).
+        hamburgerBtn = new QToolButton(this);
+        hamburgerBtn->setText(QString::fromUtf8("\xE2\x98\xB0")); // ☰
+        hamburgerBtn->setToolTip(tr("Menu"));
+        hamburgerBtn->setCursor(Qt::PointingHandCursor);
+        hamburgerBtn->setFocusPolicy(Qt::NoFocus);
+        hamburgerBtn->setPopupMode(QToolButton::InstantPopup);
+        hamburgerBtn->setMenu(hamburgerMenu);
+        hamburgerBtn->setStyleSheet(
+            "QToolButton { background: transparent; border: none; "
+            "color: #d6dae4; font-size: 16px; padding: 4px 10px; }"
+            "QToolButton:hover { color: white; }"
+            "QToolButton::menu-indicator { image: none; }"); // no extra dropdown arrow glyph
+        topMenuToolBar->addWidget(hamburgerBtn);
+
         topMenuToolBar->addWidget(topMenuBar);
         addToolBarBreak(Qt::TopToolBarArea);
         addToolBar(Qt::TopToolBarArea, topMenuToolBar);

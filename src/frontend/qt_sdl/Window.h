@@ -274,6 +274,8 @@ public:
     WindowResizeGrips* resizeGrips = nullptr;
     TopMenuBar* topMenuBar = nullptr;
     QToolBar* topMenuToolBar = nullptr;
+    QMenu* hamburgerMenu = nullptr;
+    QToolButton* hamburgerBtn = nullptr;
 
     // Small floating "bring the menu back" arrow, shown in the top-right
     // corner only while topMenuToolBar is hidden (see TopMenuBar's
