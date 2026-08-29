@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <atomic>
+#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -37,6 +38,38 @@ namespace melonDS
 // which recreates the Texcache (and therefore this) from empty.
 inline std::atomic<bool> IxraniumTexUpscaleEnabled{false};
 
+// Small-tolerance colour comparison used by the upscale equality tests
+// below instead of a strict ==. Compares each of the four packed 8-bit
+// channels independently and allows them to differ by up to
+// `tolerance` - kept genuinely small (see kColorTolerance) specifically
+// so it only smooths over minor rounding/precision noise between two
+// pixels a person would call "the same colour", not DS titles' own
+// intentional dithering (which relies on genuinely different palette
+// entries placed next to each other, a much bigger gap than this).
+inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
+{
+    if (tolerance == 0)
+        return a == b;
+
+    for (int shift = 0; shift < 32; shift += 8)
+    {
+        int ca = (int)((a >> shift) & 0xFF);
+        int cb = (int)((b >> shift) & 0xFF);
+        if (std::abs(ca - cb) > (int)tolerance)
+            return false;
+    }
+    return true;
+}
+
+// How much channel-by-channel slack ColorsClose() allows, in the same
+// 0-255 units the packed texel channels are stored in. Deliberately
+// tiny - big enough to catch a pixel that's "basically" the same
+// colour, nowhere near big enough to catch two genuinely different
+// palette entries placed next to each other for dithering. Change this
+// single constant to adjust; 0 falls back to the exact-match behaviour
+// this project started with.
+inline constexpr u32 kColorTolerance = 2;
+
 // Scale3x (a.k.a. the 3x extension of the Eagle/Scale2x family): same
 // copy-only, equality-test-based approach as EagleUpscale2x below - no
 // colour blending anywhere, so it still can't introduce a colour that
@@ -54,6 +87,7 @@ inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         if (y >= srcH) y = srcH - 1;
         return src[y * srcW + x];
     };
+    auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
 
     for (u32 y = 0; y < srcH; y++)
     {
@@ -63,15 +97,15 @@ inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
             u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
             u32 G = at(x-1, y+1), H = at(x, y+1), I = at(x+1, y+1);
 
-            u32 E0 = (D==B && D!=H && B!=F) ? D : E;
-            u32 E1 = ((D==B && D!=H && B!=F && E!=C) || (B==F && B!=D && F!=H && E!=A)) ? B : E;
-            u32 E2 = (B==F && B!=D && F!=H) ? F : E;
-            u32 E3 = ((D==B && D!=H && B!=F && E!=G) || (D==H && D!=B && H!=F && E!=A)) ? D : E;
+            u32 E0 = (Close(D,B) && !Close(D,H) && !Close(B,F)) ? D : E;
+            u32 E1 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,C)) || (Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,A))) ? B : E;
+            u32 E2 = (Close(B,F) && !Close(B,D) && !Close(F,H)) ? F : E;
+            u32 E3 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,G)) || (Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,A))) ? D : E;
             u32 E4 = E;
-            u32 E5 = ((B==F && B!=D && F!=H && E!=I) || (F==H && F!=B && H!=D && E!=C)) ? F : E;
-            u32 E6 = (D==H && D!=B && H!=F) ? D : E;
-            u32 E7 = ((D==H && D!=B && H!=F && E!=I) || (H==F && H!=D && F!=B && E!=G)) ? H : E;
-            u32 E8 = (H==F && H!=D && F!=B) ? F : E;
+            u32 E5 = ((Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,I)) || (Close(F,H) && !Close(F,B) && !Close(H,D) && !Close(E,C))) ? F : E;
+            u32 E6 = (Close(D,H) && !Close(D,B) && !Close(H,F)) ? D : E;
+            u32 E7 = ((Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,I)) || (Close(H,F) && !Close(H,D) && !Close(F,B) && !Close(E,G))) ? H : E;
+            u32 E8 = (Close(H,F) && !Close(H,D) && !Close(F,B)) ? F : E;
 
             u32* row0 = dst + (y*3+0) * dstW + (x*3);
             u32* row1 = dst + (y*3+1) * dstW + (x*3);
@@ -105,6 +139,7 @@ inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         if (y >= srcH) y = srcH - 1;
         return src[y * srcW + x];
     };
+    auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
 
     for (u32 y = 0; y < srcH; y++)
     {
@@ -115,10 +150,10 @@ inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
             u32 G = at(x-1, y+1), H = at(x, y+1), I = at(x+1, y+1);
             (void)A; (void)C; (void)G; (void)I; // unused corners of the 3x3 window, kept for clarity of the pattern above
 
-            u32 topLeft     = (D == B && D != H && B != F) ? D : E;
-            u32 topRight    = (B == F && B != D && F != H) ? F : E;
-            u32 bottomLeft  = (H == D && H != F && D != B) ? D : E;
-            u32 bottomRight = (F == H && F != B && H != D) ? H : E;
+            u32 topLeft     = (Close(D,B) && !Close(D,H) && !Close(B,F)) ? D : E;
+            u32 topRight    = (Close(B,F) && !Close(B,D) && !Close(F,H)) ? F : E;
+            u32 bottomLeft  = (Close(H,D) && !Close(H,F) && !Close(D,B)) ? D : E;
+            u32 bottomRight = (Close(F,H) && !Close(F,B) && !Close(H,D)) ? H : E;
 
             u32* out = dst + (y*2) * dstW + (x*2);
             out[0] = topLeft;
