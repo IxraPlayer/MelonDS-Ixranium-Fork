@@ -131,7 +131,8 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
     bool focusedScreen)
 {
     // "Focused Screen": the top (game) screen fills almost the whole window,
-    // and the bottom screen sits small in the top-right corner.
+    // and the bottom screen fills the full-height column along the right
+    // edge (flush to the top, right, and bottom edges - no black gap).
     // This is handled as an independent, simple layout so it doesn't
     // interfere with the existing Hybrid/Natural/etc. math below.
     if (focusedScreen)
@@ -142,16 +143,16 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
         M23_Identity(TopScreenMtx);
         M23_Identity(BotScreenMtx);
 
-        // small screen: ~22% of the window width, docked flush to the
-        // top-right corner (top edge and right edge), and flush against
-        // the main screen's right edge too - so it tiles into the
-        // corner with no black gap and no overlap on any of its three
-        // touching sides.
-        float smallW = screenWidth * 0.22f;
-        float smallScale = smallW / 256.f;
+        // small screen: sized to fill the *entire* window height (right
+        // edge to right edge, top edge to bottom edge) rather than a
+        // fixed width fraction - the previous 22%-of-width version left
+        // a large empty black area below the small screen whenever the
+        // window was taller than the small screen's own 4:3-derived
+        // height. Deriving the scale from screenHeight instead makes it
+        // occupy the full right-hand column with no gap top or bottom.
+        float smallScale = screenHeight / 192.f;
         if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
-        smallW = smallScale * 256.f; // re-derive from the (possibly floored) scale
-        float smallH = 192.f * smallScale;
+        float smallW = smallScale * 256.f;
 
         // Fit the main screen into the width that's actually left over
         // once the small screen's column is reserved, not the full
@@ -164,11 +165,12 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
 
         M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(TopScreenMtx, mainScale);
-        // Flush against the left wall, vertically centred.
-        M23_Translate(TopScreenMtx, (mainScale*256.f)/2.f, screenHeight/2.f);
+        // Centred within its own leftover column (screenWidth - smallW),
+        // not flush against the left wall.
+        M23_Translate(TopScreenMtx, (screenWidth - smallW)/2.f, screenHeight/2.f);
 
         float fbotTransX = screenWidth - smallW/2.f; // flush against the right edge
-        float fbotTransY = smallH/2.f; // flush against the top edge
+        float fbotTransY = screenHeight/2.f; // fills the full height, so centred = flush top AND bottom
 
         M23_Translate(BotScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(BotScreenMtx, smallScale);
