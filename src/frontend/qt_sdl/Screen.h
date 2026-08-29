@@ -50,6 +50,15 @@ const struct { int id; float ratio; const char* label; } aspectRatios[] =
 };
 constexpr int AspectRatiosNum = sizeof(aspectRatios) / sizeof(aspectRatios[0]);
 
+// Margin (in pixels) used to dock the in-game OSD text, debug overlay,
+// and the live keyboard-mapping preview against the game screen's own
+// corners. Shared with the pause-menu copy of the keyboard preview
+// (Window.cpp) so both land at the exact same on-screen position -
+// previously Window.cpp had its own hardcoded 16, which didn't match
+// this 6 and made the two previews jump to visibly different corners
+// on pause/unpause.
+constexpr unsigned int kOSDMargin = 6;
+
 
 class ScreenPanel : public QWidget
 {

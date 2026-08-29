@@ -59,7 +59,6 @@ using namespace QNativeInterface;
 #endif
 
 
-const u32 kOSDMargin = 6;
 const int kLogoWidth = 192;
 
 

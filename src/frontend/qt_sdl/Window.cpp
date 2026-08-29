@@ -3415,16 +3415,16 @@ void MainWindow::togglePauseMenu()
     // never touch a dangling widget.
     connect(kbPreview, &QObject::destroyed, this, [this]() { pausedKeyboardPreview = nullptr; });
 
-    // Deliberately NOT laid out via outer/kbRow: that anchored to the
-    // whole overlay's own rect (title bar/menu chrome and all), while the
-    // docked in-game preview anchors to just the game screen (`panel`).
-    // Different reference rect + different margins (18/14 vs 16/16) meant
-    // this jumped to a different spot than the live one on pause/unpause.
-    // Position it with the exact same corner formula, against the same
-    // anchor, so it lands pixel-for-pixel where the live one just was.
+    // Anchored with the exact same corner formula AND the exact same
+    // margin (kOSDMargin, shared from Screen.h) as the docked in-game
+    // preview - anything else lands this at a different spot on
+    // pause/unpause. NOT laid out via outer/kbRow: that anchored to the
+    // whole overlay's own rect (title bar/menu chrome and all), while
+    // the docked in-game preview anchors to just the game screen
+    // (`panel`).
     QWidget* kbAnchor = (panel && panel->isVisible()) ? (QWidget*)panel : (QWidget*)this;
-    QPoint kbCorner = kbAnchor->mapToGlobal(QPoint(kbAnchor->width() - kbPreview->width() - 16,
-                                                    kbAnchor->height() - kbPreview->height() - 16));
+    QPoint kbCorner = kbAnchor->mapToGlobal(QPoint(kbAnchor->width() - kbPreview->width() - (int)kOSDMargin,
+                                                    kbAnchor->height() - kbPreview->height() - (int)kOSDMargin));
     kbPreview->move(pauseMenuOverlay->mapFromGlobal(kbCorner));
     kbPreview->raise();
 
