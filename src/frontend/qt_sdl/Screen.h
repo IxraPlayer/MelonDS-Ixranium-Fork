@@ -60,8 +60,6 @@ public:
     virtual ~ScreenPanel();
 
     void setFilter(bool filter);
-    void setSharpUpscale(bool enable) { sharpUpscale = enable; update(); }
-    void setPixelScale(int scale) { pixelScale = scale; update(); }
 
     void setMouseHide(bool enable, int delay);
 
@@ -123,8 +121,6 @@ protected:
     bool screenSwap;
     int screenSizing;
     bool screenFocused;
-    bool sharpUpscale = false;
-    int pixelScale = 1;
     bool integerScaling;
     int screenAspectTop, screenAspectBot;
 
@@ -316,39 +312,6 @@ private:
     GLuint screenTexture;
     GLuint screenShaderProgram;
     GLint screenShaderTransformULoc, screenShaderScreenSizeULoc;
-    GLint screenShaderSharpUpscaleULoc;
-    GLint screenShaderPixelScaleULoc;
-
-    // Tunable knobs for the Optimized Graphics stages 0-3 (see
-    // main_shaders.h). Locations only - values are set once in
-    // initOpenGL() to the exact previous hardcoded constants, so
-    // default behaviour is unchanged; a test/tuning harness can later
-    // override them via these same uniforms without touching the
-    // shader or this stage's own logic.
-    GLint uDiagSimThreshULoc, uDiagStrengthULoc;
-    GLint uEdgeBlendRangeULoc, uEdgeBackoffRangeULoc;
-    GLint uCasSharpnessULoc, uCasAmplCapULoc, uCasAmplPowULoc;
-    GLint uCleanupRangeULoc, uCleanupStrengthULoc;
-    GLint uSupersampleULoc;
-
-    // Stage 5 (SMAA post-process) resources. See smaa_shaders.h for the
-    // rationale and smaaApplyPass()/drawScreen() in Screen.cpp for how
-    // these are wired together. All sized to the full window (see
-    // ensureSMAABuffers()), since SMAA runs once on the whole composited
-    // image rather than per screen (deliberate design choice - see the
-    // comment above ensureSMAABuffers()).
-    GLuint smaaQuadVertexBuffer, smaaQuadVertexArray;
-    GLuint smaaColorFBO, smaaColorTex;
-    GLuint smaaEdgesFBO, smaaEdgesTex;
-    GLuint smaaWeightsFBO, smaaWeightsTex;
-    GLuint smaaEdgeProgram, smaaBlendProgram, smaaNeighborProgram, smaaPassthroughProgram;
-    GLint smaaEdgeTexelSizeULoc;
-    GLint smaaBlendTexelSizeULoc;
-    GLint smaaNeighborTexelSizeULoc;
-    int smaaBufWidth = 0, smaaBufHeight = 0;
-
-    void ensureSMAABuffers(int width, int height);
-    void smaaRunPasses(int width, int height);
 
     QMutex screenSettingsLock;
     WindowInfo windowInfo;

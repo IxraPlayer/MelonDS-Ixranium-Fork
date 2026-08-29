@@ -749,10 +749,6 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             actScreenFiltering->setCheckable(true);
             connect(actScreenFiltering, &QAction::triggered, this, &MainWindow::onChangeScreenFiltering);
 
-            actSharpUpscale = menu->addAction(tr("Optimized Graphics (Beta)"));
-            actSharpUpscale->setCheckable(true);
-            connect(actSharpUpscale, &QAction::triggered, this, &MainWindow::onChangeSharpUpscale);
-
             actShowOSD = menu->addAction(tr("Show OSD"));
             actShowOSD->setCheckable(true);
             connect(actShowOSD, &QAction::triggered, this, &MainWindow::onChangeShowOSD);
@@ -999,16 +995,6 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         }
 
         actScreenFiltering->setChecked(windowCfg.GetBool("ScreenFilter"));
-        actSharpUpscale->setChecked(windowCfg.GetBool("SharpUpscale"));
-        // setChecked() above doesn't emit triggered(), so if Optimized
-        // Graphics was already on from a previous session, the 3D-side
-        // forcing (GL renderer/ScaleFactor/etc, see
-        // applyOptimizedGraphics3D) never used to run - only the 2D
-        // shader (read directly from config in Screen.cpp) took effect,
-        // leaving 3D content native-res/jagged until the checkbox was
-        // manually re-toggled. Apply it explicitly here too.
-        if (windowCfg.GetBool("SharpUpscale"))
-            applyOptimizedGraphics3D();
         actShowOSD->setChecked(showOSD);
         actShowKeyboardPreview->setChecked(showKeyboardPreview);
 
@@ -3062,95 +3048,6 @@ void MainWindow::onChangeScreenFiltering(bool checked)
 
     //emit screenLayoutChange();
     panel->setFilter(checked);
-}
-
-void MainWindow::applyOptimizedGraphics3D()
-{
-    // "Optimized Graphics" is a GL-shader-only effect (kScreenFS in
-    // main_shaders.h) for the 2D screen blit, plus (below) the 3D
-    // renderer's own internal-resolution supersampling. ScreenPanelNative
-    // (used when the screen display isn't running on OpenGL) has no
-    // shader stage at all, so with GL display off this setting would
-    // silently do nothing. Force GL display on so the toggle actually
-    // works, and do it live via the same glchange path the Video Settings
-    // dialog uses instead of asking for a manual restart.
-    bool old_gl = globalCfg.GetBool("Screen.UseGL")
-                || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
-
-    if (!globalCfg.GetBool("Screen.UseGL"))
-    {
-        globalCfg.SetBool("Screen.UseGL", true);
-    }
-
-    // The software 3D renderer draws at native (256x192) resolution
-    // with no antialiasing, which is why every 3D model looks blocky
-    // no matter how much the 2D screen shader sharpens the output -
-    // there's simply no extra geometry detail there to recover.
-    // Switch to the OpenGL 3D renderer so models get supersampled at
-    // a higher internal resolution instead.
-    if (globalCfg.GetInt("3D.Renderer") == renderer3D_Software)
-    {
-        globalCfg.SetInt("3D.Renderer", renderer3D_OpenGL);
-    }
-
-    // Bump the 3D internal render resolution (this is what actually
-    // smooths out polygon edges/textures - "GL_ScaleFactor" renders
-    // the 3D scene at NxN the native resolution and downsamples it,
-    // which is effectively supersampled antialiasing) and enable the
-    // higher-quality polygon rasteriser, but don't downgrade a value
-    // the user already set higher manually.
-    //
-    // Forced to 2x: confirmed 6x fixes 3D model jaggies but is too
-    // heavy (quadratic cost), and the FXAA post-process alternative
-    // corrupted scenes that use the 3D engine for backgrounds/effects
-    // even after several attempted fixes - removed entirely (see
-    // GPU3D_OpenGL.cpp/.h, 3DFXAA*.glsl deleted). 2x supersampling is
-    // the agreed middle ground: noticeably smoother than native 1x,
-    // ~9x cheaper than 6x. The 2D screen shader's neighbour-sampling
-    // math (main_shaders.h) now scales its texel steps with this same
-    // factor via uPixelScale, so it stays correctly tuned instead of
-    // breaking the way it did when scale was raised without that fix.
-    globalCfg.SetInt("3D.GL.ScaleFactor", 2);
-    globalCfg.SetBool("3D.GL.BetterPolygons", true);
-
-    // Perspective-correct hi-res vertex coordinates: defaults on, but a
-    // user may have turned it off from the Video Settings dialog before
-    // finding this toggle. It has no meaningful perf cost (it's a
-    // coordinate precision change, not extra rasterisation work) and
-    // directly reduces polygon warping/texture swimming, so "Optimized
-    // Graphics" should guarantee it the same way it guarantees
-    // BetterPolygons above.
-    globalCfg.SetBool("3D.GL.HiresCoordinates", true);
-
-    bool new_gl = globalCfg.GetBool("Screen.UseGL")
-                || (globalCfg.GetInt("3D.Renderer") != renderer3D_Software);
-    bool glchangeNeeded = (old_gl != new_gl);
-
-    onUpdateVideoSettings(glchangeNeeded);
-
-    // Tell the 2D screen shader the same scale it's now compositing
-    // at, so its neighbour-sampling steps match (see uPixelScale in
-    // main_shaders.h / Screen.cpp).
-    panel->setPixelScale(globalCfg.GetInt("3D.GL.ScaleFactor"));
-}
-
-void MainWindow::onChangeSharpUpscale(bool checked)
-{
-    windowCfg.SetBool("SharpUpscale", checked);
-    panel->setSharpUpscale(checked);
-
-    // Plain bilinear "Screen filtering" is redundant on top of the
-    // edge-directed filtering here (and just adds extra blur), so keep it
-    // in sync instead of leaving a conflicting state behind.
-    if (checked && actScreenFiltering->isChecked())
-    {
-        actScreenFiltering->setChecked(false);
-        windowCfg.SetBool("ScreenFilter", false);
-        panel->setFilter(false);
-    }
-
-    if (checked)
-        applyOptimizedGraphics3D();
 }
 
 void MainWindow::onChangeShowOSD(bool checked)

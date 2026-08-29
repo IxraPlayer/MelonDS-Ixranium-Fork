@@ -35,14 +35,6 @@
 
 #include "main.h"
 #include "EmuInstance.h"
-#include "smaa_shaders.h"
-
-// Master toggle for the Stage 5 SMAA post-process pass (see
-// smaa_shaders.h). Left as a single #define specifically so this can be
-// switched off in one place, with everything falling back exactly to
-// the previous (stages 0-4 only) behaviour, if it ever needs to be
-// ruled out while narrowing down an unrelated rendering issue.
-#define ENABLE_SMAA 0
 
 #include "NDS.h"
 #include "GPU.h"
@@ -144,15 +136,6 @@ void ScreenPanel::loadConfig()
     screenSwap = cfg.GetBool("ScreenSwap");
     screenSizing = cfg.GetInt("ScreenSizing");
     screenFocused = cfg.GetBool("ScreenFocused");
-    sharpUpscale = cfg.GetBool("SharpUpscale");
-    // 3D.GL.ScaleFactor lives in global config, not window config - see
-    // Window.cpp (applyOptimizedGraphics3D). The 2D compositor's output
-    // texture is rendered at this same scale (GPU2D_OpenGL.cpp uses the
-    // identical "scale" value), so the sharpening shader needs to know
-    // it to convert its native-pixel neighbour offsets into the right
-    // number of texels at runtime (see uPixelScale in main_shaders.h).
-    pixelScale = mainWindow->getGlobalConfig().GetInt("3D.GL.ScaleFactor");
-    if (pixelScale < 1) pixelScale = 1;
     integerScaling = cfg.GetBool("IntegerScaling");
     screenAspectTop = cfg.GetInt("ScreenAspectTop");
     screenAspectBot = cfg.GetInt("ScreenAspectBot");
@@ -990,7 +973,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
         // IMPORTANT: renderLock only needs to be held for the framebuffer
         // copy below (it synchronises against the emulation thread
         // producing a new frame). It used to stay locked across the whole
-        // sharpUpscale2x pass for both screens too, which stalled the emu
+        // the sharp-upscale 2x shader pass for both screens too, which stalled the emu
         // thread every single paintEvent and was the real cause of the
         // stutter when "Sharp upscale" was enabled - the upscaler itself
         // is cheap, it was the lock hold time that hurt. Now we copy,
@@ -1172,35 +1155,6 @@ void ScreenPanelGL::initOpenGL()
 
     screenShaderScreenSizeULoc = glGetUniformLocation(screenShaderProgram, "uScreenSize");
     screenShaderTransformULoc = glGetUniformLocation(screenShaderProgram, "uTransform");
-    screenShaderSharpUpscaleULoc = glGetUniformLocation(screenShaderProgram, "uSharpUpscale");
-    screenShaderPixelScaleULoc = glGetUniformLocation(screenShaderProgram, "uPixelScale");
-
-    // Stages 0-3 tuning knobs: fetch locations and set every default to
-    // exactly the value that used to be hardcoded (see main_shaders.h
-    // for the original consts these replaced) - runtime behaviour is
-    // bit-for-bit unchanged unless one of these is explicitly
-    // overridden later, e.g. by a tuning/test harness.
-    uDiagSimThreshULoc    = glGetUniformLocation(screenShaderProgram, "uDiagSimThresh");
-    uDiagStrengthULoc     = glGetUniformLocation(screenShaderProgram, "uDiagStrength");
-    uEdgeBlendRangeULoc   = glGetUniformLocation(screenShaderProgram, "uEdgeBlendRange");
-    uEdgeBackoffRangeULoc = glGetUniformLocation(screenShaderProgram, "uEdgeBackoffRange");
-    uCasSharpnessULoc     = glGetUniformLocation(screenShaderProgram, "uCasSharpness");
-    uCasAmplCapULoc       = glGetUniformLocation(screenShaderProgram, "uCasAmplCap");
-    uCasAmplPowULoc       = glGetUniformLocation(screenShaderProgram, "uCasAmplPow");
-    uCleanupRangeULoc     = glGetUniformLocation(screenShaderProgram, "uCleanupRange");
-    uCleanupStrengthULoc  = glGetUniformLocation(screenShaderProgram, "uCleanupStrength");
-    uSupersampleULoc      = glGetUniformLocation(screenShaderProgram, "uSupersample");
-
-    glUniform1f(uDiagSimThreshULoc, 0.075f);
-    glUniform1f(uDiagStrengthULoc, 0.5f);
-    glUniform2f(uEdgeBlendRangeULoc, 0.02f, 0.09f);
-    glUniform2f(uEdgeBackoffRangeULoc, 0.35f, 0.7f);
-    glUniform1f(uCasSharpnessULoc, 0.3f);
-    glUniform1f(uCasAmplCapULoc, 0.32f);
-    glUniform1f(uCasAmplPowULoc, 0.7f);
-    glUniform2f(uCleanupRangeULoc, 0.008f, 0.02f);
-    glUniform1f(uCleanupStrengthULoc, 0.18f);
-    glUniform1i(uSupersampleULoc, 0); // 0 = existing 2x2 behaviour (default, unchanged)
 
     const float vertices[] =
     {
@@ -1238,81 +1192,6 @@ void ScreenPanelGL::initOpenGL()
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, 256, 192, 2, 0, GL_BGRA, GL_UNSIGNED_BYTE, nullptr);
-
-#if ENABLE_SMAA
-    // Stage 5 (SMAA). Compile the three pass programs plus the
-    // passthrough copy, and set up the [0,1]-space fullscreen quad they
-    // all share (deliberately separate from screenVertexBuffer, which
-    // is in 0..256/0..192 DS-pixel space and carries a per-screen
-    // uTransform - see smaa_shaders.h for why these passes must NOT use
-    // that transform).
-    OpenGL::CompileVertexFragmentProgram(smaaEdgeProgram,
-                                         kSMAAQuadVS, kSMAAEdgeFS,
-                                         "SMAAEdgeShader",
-                                         {{"vPosition", 0}},
-                                         {{"oEdges", 0}});
-    glUseProgram(smaaEdgeProgram);
-    glUniform1i(glGetUniformLocation(smaaEdgeProgram, "ColorTex"), 0);
-    smaaEdgeTexelSizeULoc = glGetUniformLocation(smaaEdgeProgram, "uTexelSize");
-
-    OpenGL::CompileVertexFragmentProgram(smaaBlendProgram,
-                                         kSMAAQuadVS, kSMAABlendFS,
-                                         "SMAABlendShader",
-                                         {{"vPosition", 0}},
-                                         {{"oWeights", 0}});
-    glUseProgram(smaaBlendProgram);
-    glUniform1i(glGetUniformLocation(smaaBlendProgram, "EdgesTex"), 0);
-    smaaBlendTexelSizeULoc = glGetUniformLocation(smaaBlendProgram, "uTexelSize");
-
-    OpenGL::CompileVertexFragmentProgram(smaaNeighborProgram,
-                                         kSMAAQuadVS, kSMAANeighborFS,
-                                         "SMAANeighborShader",
-                                         {{"vPosition", 0}},
-                                         {{"oColor", 0}});
-    glUseProgram(smaaNeighborProgram);
-    glUniform1i(glGetUniformLocation(smaaNeighborProgram, "ColorTex"), 0);
-    glUniform1i(glGetUniformLocation(smaaNeighborProgram, "WeightsTex"), 1);
-    smaaNeighborTexelSizeULoc = glGetUniformLocation(smaaNeighborProgram, "uTexelSize");
-
-    OpenGL::CompileVertexFragmentProgram(smaaPassthroughProgram,
-                                         kSMAAQuadVS, kSMAAPassthroughFS,
-                                         "SMAAPassthroughShader",
-                                         {{"vPosition", 0}},
-                                         {{"oColor", 0}});
-    glUseProgram(smaaPassthroughProgram);
-    glUniform1i(glGetUniformLocation(smaaPassthroughProgram, "ColorTex"), 0);
-
-    const float smaaQuadVerts[] =
-    {
-        0.f, 0.f,
-        0.f, 1.f,
-        1.f, 1.f,
-        0.f, 0.f,
-        1.f, 1.f,
-        1.f, 0.f,
-    };
-
-    glGenBuffers(1, &smaaQuadVertexBuffer);
-    glBindBuffer(GL_ARRAY_BUFFER, smaaQuadVertexBuffer);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(smaaQuadVerts), smaaQuadVerts, GL_STATIC_DRAW);
-
-    glGenVertexArrays(1, &smaaQuadVertexArray);
-    glBindVertexArray(smaaQuadVertexArray);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2*4, (void*)(0));
-
-    // Textures/FBOs themselves are allocated lazily by
-    // ensureSMAABuffers() once the actual window size is known (and
-    // reallocated on resize) - just reserve the GL object names here.
-    glGenTextures(1, &smaaColorTex);
-    glGenTextures(1, &smaaEdgesTex);
-    glGenTextures(1, &smaaWeightsTex);
-    glGenFramebuffers(1, &smaaColorFBO);
-    glGenFramebuffers(1, &smaaEdgesFBO);
-    glGenFramebuffers(1, &smaaWeightsFBO);
-    smaaBufWidth = 0;
-    smaaBufHeight = 0;
-#endif
 
     OpenGL::CompileVertexFragmentProgram(osdShader,
                                          kScreenVS_OSD, kScreenFS_OSD,
@@ -1377,23 +1256,6 @@ void ScreenPanelGL::deinitOpenGL()
     glDeleteBuffers(1, &screenVertexBuffer);
 
     glDeleteProgram(screenShaderProgram);
-
-#if ENABLE_SMAA
-    glDeleteTextures(1, &smaaColorTex);
-    glDeleteTextures(1, &smaaEdgesTex);
-    glDeleteTextures(1, &smaaWeightsTex);
-    glDeleteFramebuffers(1, &smaaColorFBO);
-    glDeleteFramebuffers(1, &smaaEdgesFBO);
-    glDeleteFramebuffers(1, &smaaWeightsFBO);
-    glDeleteVertexArrays(1, &smaaQuadVertexArray);
-    glDeleteBuffers(1, &smaaQuadVertexBuffer);
-    glDeleteProgram(smaaEdgeProgram);
-    glDeleteProgram(smaaBlendProgram);
-    glDeleteProgram(smaaNeighborProgram);
-    glDeleteProgram(smaaPassthroughProgram);
-    smaaBufWidth = 0;
-    smaaBufHeight = 0;
-#endif
 
 
     for (const auto& [key, tex] : osdTextures)
@@ -1483,106 +1345,6 @@ void ScreenPanelGL::kbPreviewTextureUpload()
                  GL_RGBA, GL_UNSIGNED_BYTE, kbPreviewImage.bits());
 }
 
-#if ENABLE_SMAA
-// (Re)allocates the SMAA working buffers to match the current window
-// size. Deliberately a single shared set of buffers covering the whole
-// window rather than one set per screen: SMAA needs an axis-aligned
-// pixel grid to search/blend on, and the full composited window image
-// (both screens already drawn into it, in whatever position/rotation
-// the current layout uses) already IS one - see smaa_shaders.h for the
-// full reasoning. A no-op when the size hasn't changed.
-void ScreenPanelGL::ensureSMAABuffers(int width, int height)
-{
-    if (width == smaaBufWidth && height == smaaBufHeight)
-        return;
-    if (width <= 0 || height <= 0)
-        return;
-
-    smaaBufWidth = width;
-    smaaBufHeight = height;
-
-    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaColorTex, 0);
-
-    glBindTexture(GL_TEXTURE_2D, smaaEdgesTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindFramebuffer(GL_FRAMEBUFFER, smaaEdgesFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaEdgesTex, 0);
-
-    glBindTexture(GL_TEXTURE_2D, smaaWeightsTex);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glBindFramebuffer(GL_FRAMEBUFFER, smaaWeightsFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, smaaWeightsTex, 0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-// Runs the three SMAA passes (edge detect -> blend weight -> neighbour
-// blend) over smaaColorTex in place, then copies the result back to the
-// default framebuffer. Assumes smaaColorTex already holds the fully
-// composited image the caller wants antialiased (i.e. drawScreen()'s
-// normal per-screen draw loop, redirected into smaaColorFBO instead of
-// the default framebuffer - see drawScreen() below), and that the GL
-// viewport is currently (0, 0, width, height).
-void ScreenPanelGL::smaaRunPasses(int width, int height)
-{
-    glBindVertexArray(smaaQuadVertexArray);
-    glBindBuffer(GL_ARRAY_BUFFER, smaaQuadVertexBuffer);
-
-    float texelW = 1.0f / (float)width;
-    float texelH = 1.0f / (float)height;
-
-    // Pass 1: edge detection, smaaColorTex -> smaaEdgesTex
-    glBindFramebuffer(GL_FRAMEBUFFER, smaaEdgesFBO);
-    glViewport(0, 0, width, height);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glUseProgram(smaaEdgeProgram);
-    glUniform2f(smaaEdgeTexelSizeULoc, texelW, texelH);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-
-    // Pass 2: blend weight, smaaEdgesTex -> smaaWeightsTex
-    glBindFramebuffer(GL_FRAMEBUFFER, smaaWeightsFBO);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glUseProgram(smaaBlendProgram);
-    glUniform2f(smaaBlendTexelSizeULoc, texelW, texelH);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, smaaEdgesTex);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-
-    // Pass 3: neighbourhood blend, (smaaColorTex, smaaWeightsTex) -> default framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glViewport(0, 0, width, height);
-    glUseProgram(smaaNeighborProgram);
-    glUniform2f(smaaNeighborTexelSizeULoc, texelW, texelH);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, smaaColorTex);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, smaaWeightsTex);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    glActiveTexture(GL_TEXTURE0);
-}
-#endif
-
 void ScreenPanelGL::drawScreen()
 {
     if (!glContext) return;
@@ -1610,28 +1372,8 @@ void ScreenPanelGL::drawScreen()
     {
         auto nds = emuInstance->getNDS();
 
-#if ENABLE_SMAA
-        // Stage 5 must only run when Optimized Graphics (stages 0-4) is
-        // actually on - matching sharpUpscale here is what keeps this
-        // stage invisible/inert when the user has the feature toggled
-        // off, instead of silently altering the image regardless of
-        // that setting (a real bug caught via screenshot comparison:
-        // this condition was missing in the first version).
-        bool runSMAA = (sharpUpscale != 0);
-        if (runSMAA)
-        {
-            ensureSMAABuffers(w, h);
-            glBindFramebuffer(GL_FRAMEBUFFER, smaaColorFBO);
-            glClearColor(0, 0, 0, 1);
-            glClear(GL_COLOR_BUFFER_BIT);
-            glViewport(0, 0, w, h);
-        }
-#endif
-
         glUseProgram(screenShaderProgram);
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
-        glUniform1i(screenShaderSharpUpscaleULoc, sharpUpscale ? 1 : 0);
-        glUniform1i(screenShaderPixelScaleULoc, pixelScale > 0 ? pixelScale : 1);
 
         void* topbuf; void* bottombuf;
         if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
@@ -1657,12 +1399,9 @@ void ScreenPanelGL::drawScreen()
 
         screenSettingsLock.lock();
 
-        // When the edge-directed sharp upscale is active it needs crisp,
-        // un-blurred source texels to detect edges from - bilinear
-        // filtering here would pre-blur the source and defeat the whole
-        // point of the shader, so force nearest in that case regardless
-        // of the user's separate bilinear toggle.
-        GLint filter = (this->filter && !sharpUpscale) ? GL_LINEAR : GL_NEAREST;
+        // Bilinear filtering toggle - un-related to any shader-side
+        // upscaling, since that no longer exists (see main_shaders.h).
+        GLint filter = this->filter ? GL_LINEAR : GL_NEAREST;
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, filter);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, filter);
 
@@ -1676,14 +1415,6 @@ void ScreenPanelGL::drawScreen()
         }
 
         screenSettingsLock.unlock();
-
-#if ENABLE_SMAA
-        // See runSMAA above - only run these passes (and only overwrite
-        // the default framebuffer with their output) when Optimized
-        // Graphics is actually enabled.
-        if (runSMAA)
-            smaaRunPasses(w, h);
-#endif
     }
 
     osdUpdate();
