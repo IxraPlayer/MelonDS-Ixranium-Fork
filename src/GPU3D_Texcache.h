@@ -221,6 +221,7 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
 }
 
 
+inline u32 TextureWidth(u32 texparam)
 {
     return 8 << ((texparam >> 20) & 0x7);
 }
