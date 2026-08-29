@@ -90,6 +90,34 @@ inline constexpr float kSaturationBoost = 1.05f;
 // per source pixel instead of 2x2; the middle row/column additionally
 // gets to inherit a neighbour's colour (not just the four corners),
 // which is what catches a few more diagonal edges than the 2x version.
+// Simple linear per-channel blend between two packed RGBA8 texels - our
+// own plain weighted average, used to round the corners EagleUpscale3x
+// below produces (see kRoundingBlend). t=0 returns `a` unchanged, t=1
+// returns `b` unchanged; anything between is a straight
+// a*(1-t) + b*t mix on each of the four channels independently,
+// including alpha.
+inline u32 BlendColors(u32 a, u32 b, float t)
+{
+    auto ch = [&](int shift) -> u32
+    {
+        int ca = (int)((a >> shift) & 0xFF);
+        int cb = (int)((b >> shift) & 0xFF);
+        int v = (int)((float)ca * (1.0f - t) + (float)cb * t + 0.5f);
+        return (u32)std::clamp(v, 0, 255) << shift;
+    };
+    return ch(0) | ch(8) | ch(16) | ch(24);
+}
+
+// How much of the neighbour colour EagleUpscale3x's rounded corners use
+// (see BlendColors above), where each corner would otherwise be a flat
+// 100%-neighbour copy. 1.0 = the original hard-copy behaviour (a sharp,
+// pixelated staircase); lower values blend more of the centre pixel
+// back in, softening that staircase into a smoother-looking curve.
+// Kept well above 0.5 so the corner still reads as "mostly the
+// neighbour's colour" rather than washing out into a flat grey blur
+// between the two - this rounds the edge, it doesn't erase it.
+inline constexpr float kRoundingBlend = 0.7f;
+
 inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
 {
     u32 dstW = srcW * 3;
@@ -101,6 +129,7 @@ inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         return src[y * srcW + x];
     };
     auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
+    auto Round = [](u32 neighbor, u32 centre) { return BlendColors(centre, neighbor, kRoundingBlend); };
 
     for (u32 y = 0; y < srcH; y++)
     {
@@ -110,15 +139,15 @@ inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
             u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
             u32 G = at(x-1, y+1), H = at(x, y+1), I = at(x+1, y+1);
 
-            u32 E0 = (Close(D,B) && !Close(D,H) && !Close(B,F)) ? D : E;
-            u32 E1 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,C)) || (Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,A))) ? B : E;
-            u32 E2 = (Close(B,F) && !Close(B,D) && !Close(F,H)) ? F : E;
-            u32 E3 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,G)) || (Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,A))) ? D : E;
+            u32 E0 = (Close(D,B) && !Close(D,H) && !Close(B,F)) ? Round(D,E) : E;
+            u32 E1 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,C)) || (Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,A))) ? Round(B,E) : E;
+            u32 E2 = (Close(B,F) && !Close(B,D) && !Close(F,H)) ? Round(F,E) : E;
+            u32 E3 = ((Close(D,B) && !Close(D,H) && !Close(B,F) && !Close(E,G)) || (Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,A))) ? Round(D,E) : E;
             u32 E4 = E;
-            u32 E5 = ((Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,I)) || (Close(F,H) && !Close(F,B) && !Close(H,D) && !Close(E,C))) ? F : E;
-            u32 E6 = (Close(D,H) && !Close(D,B) && !Close(H,F)) ? D : E;
-            u32 E7 = ((Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,I)) || (Close(H,F) && !Close(H,D) && !Close(F,B) && !Close(E,G))) ? H : E;
-            u32 E8 = (Close(H,F) && !Close(H,D) && !Close(F,B)) ? F : E;
+            u32 E5 = ((Close(B,F) && !Close(B,D) && !Close(F,H) && !Close(E,I)) || (Close(F,H) && !Close(F,B) && !Close(H,D) && !Close(E,C))) ? Round(F,E) : E;
+            u32 E6 = (Close(D,H) && !Close(D,B) && !Close(H,F)) ? Round(D,E) : E;
+            u32 E7 = ((Close(D,H) && !Close(D,B) && !Close(H,F) && !Close(E,I)) || (Close(H,F) && !Close(H,D) && !Close(F,B) && !Close(E,G))) ? Round(H,E) : E;
+            u32 E8 = (Close(H,F) && !Close(H,D) && !Close(F,B)) ? Round(F,E) : E;
 
             u32* row0 = dst + (y*3+0) * dstW + (x*3);
             u32* row1 = dst + (y*3+1) * dstW + (x*3);
