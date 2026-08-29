@@ -154,20 +154,25 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
         if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
         float smallW = smallScale * 256.f;
 
-        // Fit the main screen into the width that's actually left over
-        // once the small screen's column is reserved, not the full
-        // window width - that's what makes their shared edge flush
-        // instead of the two either overlapping or leaving a gap
-        // (the previous version used a fixed 0.55x fudge factor here
-        // that only happened to line up for one window aspect ratio).
-        float mainScale = std::min((screenWidth - smallW) / 256.f, screenHeight / 192.f);
+        // Fit the main screen into the width that's left once both the
+        // small screen's column AND a real gap between the two screens
+        // are reserved. Using screenGap (the same gap size already used
+        // by every other layout below) keeps this consistent instead of
+        // inventing a separate constant, and reserving it here - rather
+        // than just filling whatever's left - is what leaves an actual
+        // black gap between the two screens instead of them touching.
+        float mainAreaW = screenWidth - smallW - screenGap;
+        float mainScale = std::min(mainAreaW / 256.f, screenHeight / 192.f);
         if (integerScale) mainScale = floorf(mainScale);
 
         M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(TopScreenMtx, mainScale);
-        // Centred within its own leftover column (screenWidth - smallW),
-        // not flush against the left wall.
-        M23_Translate(TopScreenMtx, (screenWidth - smallW)/2.f, screenHeight/2.f);
+        // Centred within mainAreaW (not the full leftover column) -
+        // since mainScale may be height-limited rather than
+        // width-limited, this leaves symmetric black margins on both
+        // its left AND right sides rather than sitting flush against
+        // either edge.
+        M23_Translate(TopScreenMtx, mainAreaW/2.f, screenHeight/2.f);
 
         float fbotTransX = screenWidth - smallW/2.f; // flush against the right edge
         float fbotTransY = screenHeight/2.f; // fills the full height, so centred = flush top AND bottom
