@@ -130,11 +130,13 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
     float topAspect, float botAspect,
     bool focusedScreen)
 {
-    // "Focused Screen": the top (game) screen fills almost the whole window,
-    // and the bottom screen fills the full-height column along the right
-    // edge (flush to the top, right, and bottom edges - no black gap).
-    // This is handled as an independent, simple layout so it doesn't
-    // interfere with the existing Hybrid/Natural/etc. math below.
+    // "Focused Screen": the top (game) screen is centred and scaled to
+    // fill as much of the window as it can on its own (not sharing the
+    // width with the small screen), and the bottom screen sits as a
+    // small overlay ("picture-in-picture") docked into the top-right
+    // corner, on top of it. This is handled as an independent, simple
+    // layout so it doesn't interfere with the existing Hybrid/Natural/
+    // etc. math below.
     if (focusedScreen)
     {
         HybEnable = false;
@@ -143,39 +145,29 @@ void ScreenLayout::Setup(int screenWidth, int screenHeight,
         M23_Identity(TopScreenMtx);
         M23_Identity(BotScreenMtx);
 
-        // small screen: sized to fill the *entire* window height (right
-        // edge to right edge, top edge to bottom edge) rather than a
-        // fixed width fraction - the previous 22%-of-width version left
-        // a large empty black area below the small screen whenever the
-        // window was taller than the small screen's own 4:3-derived
-        // height. Deriving the scale from screenHeight instead makes it
-        // occupy the full right-hand column with no gap top or bottom.
-        float smallScale = screenHeight / 192.f;
-        if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
-        float smallW = smallScale * 256.f;
-
-        // Fit the main screen into the width that's left once both the
-        // small screen's column AND a real gap between the two screens
-        // are reserved. Using screenGap (the same gap size already used
-        // by every other layout below) keeps this consistent instead of
-        // inventing a separate constant, and reserving it here - rather
-        // than just filling whatever's left - is what leaves an actual
-        // black gap between the two screens instead of them touching.
-        float mainAreaW = screenWidth - smallW - screenGap;
-        float mainScale = std::min(mainAreaW / 256.f, screenHeight / 192.f);
+        // Main screen: scaled to the largest size that fits the window
+        // on either axis, centred - nothing is reserved for the small
+        // screen, since it now overlays on top rather than sitting in
+        // its own column.
+        float mainScale = std::min(screenWidth / 256.f, screenHeight / 192.f);
         if (integerScale) mainScale = floorf(mainScale);
 
         M23_Translate(TopScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(TopScreenMtx, mainScale);
-        // Centred within mainAreaW (not the full leftover column) -
-        // since mainScale may be height-limited rather than
-        // width-limited, this leaves symmetric black margins on both
-        // its left AND right sides rather than sitting flush against
-        // either edge.
-        M23_Translate(TopScreenMtx, mainAreaW/2.f, screenHeight/2.f);
+        M23_Translate(TopScreenMtx, screenWidth/2.f, screenHeight/2.f);
+
+        // Small screen: a fixed-proportion corner overlay (~22% of the
+        // window's width), docked flush into the top-right corner of
+        // the *window* itself (not of the main screen) - independent of
+        // wherever the now-centred main screen's own edges land.
+        float smallW = screenWidth * 0.22f;
+        float smallScale = smallW / 256.f;
+        if (integerScale) smallScale = std::max(1.f, floorf(smallScale));
+        smallW = smallScale * 256.f; // re-derive from the (possibly floored) scale
+        float smallH = smallScale * 192.f;
 
         float fbotTransX = screenWidth - smallW/2.f; // flush against the right edge
-        float fbotTransY = screenHeight/2.f; // fills the full height, so centred = flush top AND bottom
+        float fbotTransY = smallH/2.f; // flush against the top edge
 
         M23_Translate(BotScreenMtx, -256/2.f, -192/2.f);
         M23_Scale(BotScreenMtx, smallScale);
