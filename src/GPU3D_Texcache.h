@@ -4,6 +4,7 @@
 #include "types.h"
 #include "GPU.h"
 
+#include <algorithm>
 #include <assert.h>
 #include <atomic>
 #include <cstdlib>
@@ -69,6 +70,13 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
 // single constant to adjust; 0 falls back to the exact-match behaviour
 // this project started with.
 inline constexpr u32 kColorTolerance = 2;
+
+// Strength of the post-upscale sharpening pass (TextureSharpen), in the
+// same 0-1 range CAS used for the earlier (now-removed) screen-space
+// sharpener - kept at a similarly moderate level for the same reason:
+// enough to make edges/text read as crisper, not enough to grow a
+// visible halo around them.
+inline constexpr float kSharpenStrength = 0.3f;
 
 // Scale3x (a.k.a. the 3x extension of the Eagle/Scale2x family): same
 // copy-only, equality-test-based approach as EagleUpscale2x below - no
@@ -164,7 +172,55 @@ inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
     }
 }
 
-inline u32 TextureWidth(u32 texparam)
+// Texture-space sharpening, applied AFTER the upscale above (never
+// before it - sharpening first would exaggerate small contrast
+// differences into what looks like a hard edge, and the upscale pass
+// would then "helpfully" treat that as a real diagonal to merge,
+// compounding the two into artifacts neither pass would cause alone).
+//
+// Plain unsharp-mask: for each pixel, compare it to the average of its
+// four orthogonal neighbours and push it further in whatever direction
+// it already differs - brightens the light side of an edge and darkens
+// the dark side, which is what makes text/line-art edges read as
+// crisper without changing anything about flat, already-uniform areas
+// (their neighbour average equals themselves, so the push there is
+// zero). Alpha is left untouched - sharpening transparency edges only
+// risks visible fringing on cutout sprites for no readability benefit.
+inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strength)
+{
+    auto at = [&](u32 x, u32 y) -> u32
+    {
+        if (x >= w) x = w - 1;
+        if (y >= h) y = h - 1;
+        return src[y * w + x];
+    };
+
+    auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
+
+    for (u32 y = 0; y < h; y++)
+    {
+        for (u32 x = 0; x < w; x++)
+        {
+            u32 c = at(x, y);
+            u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
+
+            u32 out = 0;
+            for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha (shift 24)
+            {
+                int cc = channel(c, shift);
+                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                int sharpened = cc + (int)((float)(cc - avg) * strength);
+                out |= clampByte(sharpened) << shift;
+            }
+            out |= c & 0xFF000000; // alpha passed through unchanged
+
+            dst[y * w + x] = out;
+        }
+    }
+}
+
+
 {
     return 8 << ((texparam >> 20) & 0x7);
 }
@@ -434,6 +490,13 @@ public:
             uploadW = width * 3;
             uploadH = height * 3;
             uploadData = UpscaleBuffer;
+
+            // Sharpening always runs immediately after (never before -
+            // see TextureSharpen's own comment) the upscale, on its
+            // output - both are part of the one "Ixranium Graphics"
+            // toggle rather than a separate switch.
+            TextureSharpen(UpscaleBuffer, uploadW, uploadH, SharpenBuffer, kSharpenStrength);
+            uploadData = SharpenBuffer;
         }
 
         auto& texArrays = TexArrays[widthLog2][heightLog2];
@@ -517,6 +580,13 @@ private:
     // IxraniumTexUpscaleEnabled check in GetTexture). Sized for the
     // largest possible DS texture (1024x1024) upscaled 3x on each axis.
     u32 UpscaleBuffer[3072*3072];
+    // Second scratch buffer for the post-upscale sharpening pass (see
+    // TextureSharpen) - needs to be separate from UpscaleBuffer since
+    // sharpening reads each pixel's neighbours while writing, which an
+    // in-place pass would corrupt (a pixel's neighbour may already have
+    // been overwritten with its own sharpened value by the time it's
+    // read). Same size as UpscaleBuffer for the same reason.
+    u32 SharpenBuffer[3072*3072];
 };
 
 }
