@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <assert.h>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <functional>
@@ -88,6 +90,103 @@ inline constexpr u32 kColorTolerance = 2;
 // work saved. This pool's threads are created exactly once, sleep on a
 // condition variable between jobs, and are reused for every call for
 // the lifetime of the process.
+// ==================== Ixranium performance profiler ====================
+// Purpose: measure exactly where render-thread time is going in the
+// upscale pipeline instead of guessing further from screenshots/CPU%
+// alone. Every counter here is an atomic add per texture - no locking,
+// no per-texture I/O (the old per-texture printf() elsewhere in this
+// file was itself a big chunk of an earlier problem - see its comment).
+// The table is written to stdout AND ixranium_profile.log only once
+// every kProfileIntervalFrames frames, never per texture, so the
+// profiler's own overhead stays negligible relative to what it's
+// measuring.
+struct IxraniumProfiler
+{
+    std::atomic<u64> CacheHits{0}, CacheMisses{0};
+    std::atomic<u64> ContentCacheHits{0}, ContentCacheMisses{0};
+    std::atomic<u64> NewGLArrayAllocs{0}, GLUploads{0};
+
+    std::atomic<u64> DecodeNs{0};
+    std::atomic<u64> UpscaleNs{0};
+    std::atomic<u64> SharpenNs{0};
+    std::atomic<u64> GLAllocNs{0};
+    std::atomic<u64> GLUploadNs{0};
+
+    std::atomic<u64> FrameCount{0};
+
+    static constexpr u64 kProfileIntervalFrames = 60;
+
+    static IxraniumProfiler& Get() { static IxraniumProfiler p; return p; }
+
+    // RAII helper: `IxraniumProfiler::Timer t(target);` adds the elapsed
+    // time to `target` when it goes out of scope. Keeps the call sites
+    // below to one line each instead of manual now()/subtract pairs.
+    struct Timer
+    {
+        std::atomic<u64>& Target;
+        std::chrono::high_resolution_clock::time_point Start;
+        explicit Timer(std::atomic<u64>& target)
+            : Target(target), Start(std::chrono::high_resolution_clock::now()) {}
+        ~Timer()
+        {
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::high_resolution_clock::now() - Start).count();
+            Target.fetch_add((u64)ns, std::memory_order_relaxed);
+        }
+    };
+
+    // Call once per frame (see Texcache::Update, which already runs
+    // exactly once per frame to check VRAM invalidation). Dumps and
+    // resets the table every kProfileIntervalFrames frames.
+    void OnFrame(bool upscaleOn)
+    {
+        if (!upscaleOn)
+            return;
+        if (FrameCount.fetch_add(1, std::memory_order_relaxed) + 1 < kProfileIntervalFrames)
+            return;
+        FrameCount.store(0, std::memory_order_relaxed);
+        Dump();
+        Reset();
+    }
+
+    void Dump()
+    {
+        auto ms = [](u64 ns) { return (double)ns / 1e6; };
+        u64 hits = CacheHits.load(), misses = CacheMisses.load();
+        u64 chits = ContentCacheHits.load(), cmisses = ContentCacheMisses.load();
+        u64 fullRuns = cmisses; // pipeline only actually runs on a content-cache miss
+
+        char buf[2048];
+        int n = 0;
+        n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache hits",     (unsigned long long)chits,   "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache misses",   (unsigned long long)cmisses, "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  decode",              (unsigned long long)fullRuns, ms(DecodeNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  eagle upscale 4x",    (unsigned long long)fullRuns, ms(UpscaleNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  sharpen+saturate",    (unsigned long long)fullRuns, ms(SharpenNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL new-array allocs",   (unsigned long long)NewGLArrayAllocs.load(), ms(GLAllocNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL uploads",            (unsigned long long)GLUploads.load(), ms(GLUploadNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "===============================================\n");
+        (void)n;
+
+        fputs(buf, stdout);
+        fflush(stdout);
+        FILE* f = fopen("ixranium_profile.log", "a");
+        if (f) { fputs(buf, f); fclose(f); }
+    }
+
+    void Reset()
+    {
+        CacheHits = 0; CacheMisses = 0;
+        ContentCacheHits = 0; ContentCacheMisses = 0;
+        NewGLArrayAllocs = 0; GLUploads = 0;
+        DecodeNs = 0; UpscaleNs = 0; SharpenNs = 0; GLAllocNs = 0; GLUploadNs = 0;
+    }
+};
+
 class RowWorkerPool
 {
 public:
@@ -776,6 +875,8 @@ public:
 
     bool Update(u8& clrBitmapDirty)
     {
+        IxraniumProfiler::Get().OnFrame(IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed));
+
         auto textureDirty = GPU.VRAMDirty_Texture.DeriveState(GPU.VRAMMap_Texture, GPU);
         auto texPalDirty = GPU.VRAMDirty_TexPal.DeriveState(GPU.VRAMMap_TexPal, GPU);
 
@@ -866,11 +967,13 @@ public:
 
         if (it != Cache.end())
         {
+            IxraniumProfiler::Get().CacheHits.fetch_add(1, std::memory_order_relaxed);
             textureHandle = it->second.Texture.TextureID;
             layer = it->second.Texture.Layer;
             helper = &it->second.LastVariant;
             return;
         }
+        IxraniumProfiler::Get().CacheMisses.fetch_add(1, std::memory_order_relaxed);
 
         u32 widthLog2 = (texParam >> 20) & 0x7;
         u32 heightLog2 = (texParam >> 23) & 0x7;
@@ -885,6 +988,8 @@ public:
         entry.WidthLog2 = widthLog2;
         entry.HeightLog2 = heightLog2;
 
+        {
+        IxraniumProfiler::Timer decodeTimer(IxraniumProfiler::Get().DecodeNs);
         // apparently a new texture
         if (fmt == 7)
         {
@@ -940,6 +1045,7 @@ public:
             case 4: ConvertNColorsTexture<outputFmt_RGB6A5, 8>(width, height, DecodingBuffer, addr, palAddr, color0Transparent, GPU); break;
             }
         }
+        } // decodeTimer scope
 
         for (int i = 0; i < 2; i++)
         {
@@ -980,6 +1086,11 @@ public:
                 uploadH = height * 4;
                 uploadData = cit->second.data();
                 gotFromContentCache = true;
+                IxraniumProfiler::Get().ContentCacheHits.fetch_add(1, std::memory_order_relaxed);
+            }
+            else
+            {
+                IxraniumProfiler::Get().ContentCacheMisses.fetch_add(1, std::memory_order_relaxed);
             }
         }
 
@@ -993,7 +1104,10 @@ public:
             // Eagle 4x upscale (see EagleUpscale4x's own comment) -
             // back to this after the smooth-bilinear 2x experiment,
             // which fixed neither the blur complaint nor the FPS issue.
-            EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
+            {
+                IxraniumProfiler::Timer upscaleTimer(IxraniumProfiler::Get().UpscaleNs);
+                EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
+            }
             uploadW = width * 4;
             uploadH = height * 4;
 
@@ -1001,8 +1115,11 @@ public:
             // instead of two (see TextureSharpenAndSaturate) - same
             // output, one less full read/write sweep over up to
             // 4096x4096 pixels per cache-miss texture.
-            TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
-                                       kSharpenStrength, kSaturationBoost);
+            {
+                IxraniumProfiler::Timer sharpenTimer(IxraniumProfiler::Get().SharpenNs);
+                TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
+                                           kSharpenStrength, kSaturationBoost);
+            }
 
             uploadData = SharpenBuffer;
 
@@ -1050,7 +1167,11 @@ public:
 
             // allocate new array texture
             //printf("allocating new layer set for %d %d %d %d\n", uploadW, uploadH, texArrays.size()-1, array.ImageDescriptor);
-            array = TexLoader.GenerateTexture(uploadW, uploadH, layers);
+            {
+                IxraniumProfiler::Timer allocTimer(IxraniumProfiler::Get().GLAllocNs);
+                array = TexLoader.GenerateTexture(uploadW, uploadH, layers);
+            }
+            IxraniumProfiler::Get().NewGLArrayAllocs.fetch_add(1, std::memory_order_relaxed);
 
             for (u32 i = 0; i < layers; i++)
             {
@@ -1063,7 +1184,11 @@ public:
 
         entry.Texture = storagePlace;
 
-        TexLoader.UploadTexture(storagePlace.TextureID, uploadW, uploadH, storagePlace.Layer, uploadData);
+        {
+            IxraniumProfiler::Timer uploadTimer(IxraniumProfiler::Get().GLUploadNs);
+            TexLoader.UploadTexture(storagePlace.TextureID, uploadW, uploadH, storagePlace.Layer, uploadData);
+        }
+        IxraniumProfiler::Get().GLUploads.fetch_add(1, std::memory_order_relaxed);
         //printf("using storage place %d %d | %d %d (%d)\n", uploadW, uploadH, storagePlace.TexArrayIdx, storagePlace.LayerIdx, array.ImageDescriptor);
 
         textureHandle = storagePlace.TextureID;
