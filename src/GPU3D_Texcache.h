@@ -1174,54 +1174,28 @@ public:
         // Per-frame budget check (see kMaxUpscalesPerFrame's comment) -
         // content-cache hits above don't touch this budget at all
         // (they're already cheap, just a lookup), only genuine full
-        // pipeline runs count against it.
+        // pipeline runs count against it. Now that the GPU path below
+        // exists, a "full pipeline run" costs the CPU almost nothing
+        // when the GPU path is available (the CPU only decodes at
+        // native res and issues a handful of GL calls) - this budget
+        // matters far more for the CPU-fallback case (compute mode, or
+        // shader compile failure).
         bool overBudget = upscaleOn && !gotFromContentCache
                         && UpscalesThisFrame >= kMaxUpscalesPerFrame;
 
-        if (upscaleOn && !gotFromContentCache && !overBudget)
+        // Whether this texture needs the full upscale+sharpen+saturate
+        // treatment at all (as opposed to being served from the content
+        // cache, or shown at native resolution because upscaling is off
+        // or this frame's budget is already spent). Only sets
+        // uploadW/uploadH here - the actual pixel production (GPU
+        // shader, or CPU fallback) happens further down, AFTER storage
+        // for this texture has been allocated, because the GPU path
+        // needs to know which array/layer to render into.
+        bool needsFullPipeline = upscaleOn && !gotFromContentCache && !overBudget;
+        if (needsFullPipeline)
         {
-            UpscalesThisFrame++;
-
-            // NOTE: the old unconditional printf() here (once per
-            // cache-miss texture) was a big FPS cost by itself - a
-            // synchronous stdout write firing on every cache-miss.
-            // Removed. If you need it back for debugging, guard it
-            // behind a build flag, never ship it unconditional here.
-            // Eagle 4x upscale (see EagleUpscale4x's own comment) -
-            // back to this after the smooth-bilinear 2x experiment,
-            // which fixed neither the blur complaint nor the FPS issue.
-            {
-                IxraniumProfiler::Timer upscaleTimer(IxraniumProfiler::Get().UpscaleNs);
-                EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
-            }
             uploadW = width * 4;
             uploadH = height * 4;
-
-            // Sharpen + saturate combined into one pass over the buffer
-            // instead of two (see TextureSharpenAndSaturate) - same
-            // output, one less full read/write sweep over up to
-            // 4096x4096 pixels per cache-miss texture.
-            {
-                IxraniumProfiler::Timer sharpenTimer(IxraniumProfiler::Get().SharpenNs);
-                TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
-                                           kSharpenStrength, kSaturationBoost);
-            }
-
-            uploadData = SharpenBuffer;
-
-            // Cache this result under its content hash so the next
-            // cache-miss with the *same* underlying texture data (just
-            // at a different VRAM address/texParam - the sprite
-            // double-buffering/animation case) can skip straight to
-            // reusing it instead of redoing the whole upscale pipeline.
-            // Capped so a game with huge numbers of genuinely unique
-            // textures can't grow this unbounded; simple over clever -
-            // this is a perf cache, not a correctness requirement, so
-            // just clear and start refilling once full.
-            if (UpscaleResultCache.size() >= kUpscaleResultCacheCap)
-                UpscaleResultCache.clear();
-            UpscaleResultCache.emplace(contentKey,
-                std::vector<u32>(uploadData, uploadData + (size_t)uploadW * uploadH));
         }
 
         auto& texArrays = TexArrays[widthLog2][heightLog2];
@@ -1270,11 +1244,97 @@ public:
 
         entry.Texture = storagePlace;
 
+        // Now that we know exactly which array+layer this texture lands
+        // in, actually produce its pixels:
+        //  - content-cache hit: just re-upload the previously-computed
+        //    CPU buffer (unchanged from before).
+        //  - needs the full pipeline: try the GPU shader first (see
+        //    GPUUpscaleSharpenSaturate's comment) - it renders straight
+        //    into this array+layer, no separate CPU upload call needed
+        //    at all. Only falls back to the old CPU EagleUpscale4x +
+        //    TextureSharpenAndSaturate + upload chain if the GPU path
+        //    isn't available (compute mode, or the shader failed to
+        //    compile - see its own comment for why that's not silently
+        //    papered over).
+        //  - neither: native-resolution upload, same as always.
+        bool didGPUPipeline = false;
+        if (needsFullPipeline)
         {
+            UpscalesThisFrame++;
+
+            IxraniumProfiler::Timer upscaleTimer(IxraniumProfiler::Get().UpscaleNs);
+            didGPUPipeline = TexLoader.GPUUpscaleSharpenSaturate(
+                storagePlace.TextureID, width, height, storagePlace.Layer,
+                DecodingBuffer, kSharpenStrength, kSaturationBoost);
+        }
+
+        if (didGPUPipeline)
+        {
+            // Shader wrote the final result directly into
+            // storagePlace's layer - nothing left to do. Not populating
+            // UpscaleResultCache here: that CPU-side cache existed to
+            // skip the *expensive CPU* pipeline for repeat content: now
+            // that the pipeline runs on the GPU (cheap), a repeat
+            // content-cache miss just means running this same fast GPU
+            // pass again, which is an acceptable trade against the
+            // complexity of caching GPU-produced results.
+        }
+        else if (needsFullPipeline)
+        {
+            // GPU path unavailable (compute mode, or shader compile
+            // failed) - fall back to the original CPU pipeline exactly
+            // as before.
+            //
+            // NOTE: the old unconditional printf() here (once per
+            // cache-miss texture) was a big FPS cost by itself - a
+            // synchronous stdout write firing on every cache-miss.
+            // Removed. If you need it back for debugging, guard it
+            // behind a build flag, never ship it unconditional here.
+            {
+                IxraniumProfiler::Timer upscaleTimer(IxraniumProfiler::Get().UpscaleNs);
+                EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
+            }
+
+            // Sharpen + saturate combined into one pass over the buffer
+            // instead of two (see TextureSharpenAndSaturate) - same
+            // output, one less full read/write sweep over up to
+            // 4096x4096 pixels per cache-miss texture.
+            {
+                IxraniumProfiler::Timer sharpenTimer(IxraniumProfiler::Get().SharpenNs);
+                TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
+                                           kSharpenStrength, kSaturationBoost);
+            }
+
+            uploadData = SharpenBuffer;
+
+            // Cache this result under its content hash so the next
+            // cache-miss with the *same* underlying texture data (just
+            // at a different VRAM address/texParam - the sprite
+            // double-buffering/animation case) can skip straight to
+            // reusing it instead of redoing the whole upscale pipeline.
+            // Capped so a game with huge numbers of genuinely unique
+            // textures can't grow this unbounded; simple over clever -
+            // this is a perf cache, not a correctness requirement, so
+            // just clear and start refilling once full.
+            if (UpscaleResultCache.size() >= kUpscaleResultCacheCap)
+                UpscaleResultCache.clear();
+            UpscaleResultCache.emplace(contentKey,
+                std::vector<u32>(uploadData, uploadData + (size_t)uploadW * uploadH));
+
             IxraniumProfiler::Timer uploadTimer(IxraniumProfiler::Get().GLUploadNs);
             TexLoader.UploadTexture(storagePlace.TextureID, uploadW, uploadH, storagePlace.Layer, uploadData);
+            IxraniumProfiler::Get().GLUploads.fetch_add(1, std::memory_order_relaxed);
         }
-        IxraniumProfiler::Get().GLUploads.fetch_add(1, std::memory_order_relaxed);
+        else
+        {
+            // Content-cache hit, or no upscaling needed at all (off, or
+            // this frame's budget was already spent) - straightforward
+            // upload of uploadData/uploadW/uploadH as already set above.
+            IxraniumProfiler::Timer uploadTimer(IxraniumProfiler::Get().GLUploadNs);
+            TexLoader.UploadTexture(storagePlace.TextureID, uploadW, uploadH, storagePlace.Layer, uploadData);
+            IxraniumProfiler::Get().GLUploads.fetch_add(1, std::memory_order_relaxed);
+        }
+
         //printf("using storage place %d %d | %d %d (%d)\n", uploadW, uploadH, storagePlace.TexArrayIdx, storagePlace.LayerIdx, array.ImageDescriptor);
 
         textureHandle = storagePlace.TextureID;

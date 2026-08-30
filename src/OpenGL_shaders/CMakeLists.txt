@@ -26,6 +26,9 @@ set(OPENGL_SHADER_FILES
     3DFinalPassVS.glsl
     3DFinalPassEdgeFS.glsl
     3DFinalPassFogFS.glsl
+
+    3DTexUpscaleVS.glsl
+    3DTexUpscaleFS.glsl
 )
 
 foreach(SH_INPUT ${OPENGL_SHADER_FILES})
