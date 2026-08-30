@@ -90,103 +90,6 @@ inline constexpr u32 kColorTolerance = 2;
 // work saved. This pool's threads are created exactly once, sleep on a
 // condition variable between jobs, and are reused for every call for
 // the lifetime of the process.
-// ==================== Ixranium performance profiler ====================
-// Purpose: measure exactly where render-thread time is going in the
-// upscale pipeline instead of guessing further from screenshots/CPU%
-// alone. Every counter here is an atomic add per texture - no locking,
-// no per-texture I/O (the old per-texture printf() elsewhere in this
-// file was itself a big chunk of an earlier problem - see its comment).
-// The table is written to stdout AND ixranium_profile.log only once
-// every kProfileIntervalFrames frames, never per texture, so the
-// profiler's own overhead stays negligible relative to what it's
-// measuring.
-struct IxraniumProfiler
-{
-    std::atomic<u64> CacheHits{0}, CacheMisses{0};
-    std::atomic<u64> ContentCacheHits{0}, ContentCacheMisses{0};
-    std::atomic<u64> NewGLArrayAllocs{0}, GLUploads{0};
-
-    std::atomic<u64> DecodeNs{0};
-    std::atomic<u64> UpscaleNs{0};
-    std::atomic<u64> SharpenNs{0};
-    std::atomic<u64> GLAllocNs{0};
-    std::atomic<u64> GLUploadNs{0};
-
-    std::atomic<u64> FrameCount{0};
-
-    static constexpr u64 kProfileIntervalFrames = 60;
-
-    static IxraniumProfiler& Get() { static IxraniumProfiler p; return p; }
-
-    // RAII helper: `IxraniumProfiler::Timer t(target);` adds the elapsed
-    // time to `target` when it goes out of scope. Keeps the call sites
-    // below to one line each instead of manual now()/subtract pairs.
-    struct Timer
-    {
-        std::atomic<u64>& Target;
-        std::chrono::high_resolution_clock::time_point Start;
-        explicit Timer(std::atomic<u64>& target)
-            : Target(target), Start(std::chrono::high_resolution_clock::now()) {}
-        ~Timer()
-        {
-            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::high_resolution_clock::now() - Start).count();
-            Target.fetch_add((u64)ns, std::memory_order_relaxed);
-        }
-    };
-
-    // Call once per frame (see Texcache::Update, which already runs
-    // exactly once per frame to check VRAM invalidation). Dumps and
-    // resets the table every kProfileIntervalFrames frames.
-    void OnFrame(bool upscaleOn)
-    {
-        if (!upscaleOn)
-            return;
-        if (FrameCount.fetch_add(1, std::memory_order_relaxed) + 1 < kProfileIntervalFrames)
-            return;
-        FrameCount.store(0, std::memory_order_relaxed);
-        Dump();
-        Reset();
-    }
-
-    void Dump()
-    {
-        auto ms = [](u64 ns) { return (double)ns / 1e6; };
-        u64 hits = CacheHits.load(), misses = CacheMisses.load();
-        u64 chits = ContentCacheHits.load(), cmisses = ContentCacheMisses.load();
-        u64 fullRuns = cmisses; // pipeline only actually runs on a content-cache miss
-
-        char buf[2048];
-        int n = 0;
-        n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache hits",     (unsigned long long)chits,   "-");
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache misses",   (unsigned long long)cmisses, "-");
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  decode",              (unsigned long long)fullRuns, ms(DecodeNs.load()));
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  eagle upscale 4x",    (unsigned long long)fullRuns, ms(UpscaleNs.load()));
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  sharpen+saturate",    (unsigned long long)fullRuns, ms(SharpenNs.load()));
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL new-array allocs",   (unsigned long long)NewGLArrayAllocs.load(), ms(GLAllocNs.load()));
-        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL uploads",            (unsigned long long)GLUploads.load(), ms(GLUploadNs.load()));
-        n += snprintf(buf+n, sizeof(buf)-n, "===============================================\n");
-        (void)n;
-
-        fputs(buf, stdout);
-        fflush(stdout);
-        FILE* f = fopen("ixranium_profile.log", "a");
-        if (f) { fputs(buf, f); fclose(f); }
-    }
-
-    void Reset()
-    {
-        CacheHits = 0; CacheMisses = 0;
-        ContentCacheHits = 0; ContentCacheMisses = 0;
-        NewGLArrayAllocs = 0; GLUploads = 0;
-        DecodeNs = 0; UpscaleNs = 0; SharpenNs = 0; GLAllocNs = 0; GLUploadNs = 0;
-    }
-};
-
 class RowWorkerPool
 {
 public:
@@ -292,6 +195,105 @@ private:
 // the calling thread directly when the work is small enough that
 // dispatch overhead wouldn't pay off, or the machine only has one
 // hardware thread.
+// ==================== Ixranium performance profiler ====================
+// Purpose: measure exactly where render-thread time is going in the
+// upscale pipeline instead of guessing further from screenshots/CPU%
+// alone. Every counter here is an atomic add per texture - no locking,
+// no per-texture I/O (the old per-texture printf() elsewhere in this
+// file was itself a big chunk of an earlier problem - see its comment).
+// The table is written to stdout AND ixranium_profile.log only once
+// every kProfileIntervalFrames frames, never per texture, so the
+// profiler's own overhead stays negligible relative to what it's
+// measuring.
+struct IxraniumProfiler
+{
+    std::atomic<u64> CacheHits{0}, CacheMisses{0};
+    std::atomic<u64> ContentCacheHits{0}, ContentCacheMisses{0};
+    std::atomic<u64> NewGLArrayAllocs{0}, GLUploads{0};
+
+    std::atomic<u64> DecodeNs{0};
+    std::atomic<u64> UpscaleNs{0};
+    std::atomic<u64> SharpenNs{0};
+    std::atomic<u64> GLAllocNs{0};
+    std::atomic<u64> GLUploadNs{0};
+
+    std::atomic<u64> FrameCount{0};
+
+    static constexpr u64 kProfileIntervalFrames = 60;
+
+    static IxraniumProfiler& Get() { static IxraniumProfiler p; return p; }
+
+    // RAII helper: `IxraniumProfiler::Timer t(target);` adds the elapsed
+    // time to `target` when it goes out of scope. Keeps the call sites
+    // below to one line each instead of manual now()/subtract pairs.
+    struct Timer
+    {
+        std::atomic<u64>& Target;
+        std::chrono::high_resolution_clock::time_point Start;
+        explicit Timer(std::atomic<u64>& target)
+            : Target(target), Start(std::chrono::high_resolution_clock::now()) {}
+        ~Timer()
+        {
+            auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::high_resolution_clock::now() - Start).count();
+            Target.fetch_add((u64)ns, std::memory_order_relaxed);
+        }
+    };
+
+    // Call once per frame (see Texcache::Update, which already runs
+    // exactly once per frame to check VRAM invalidation). Dumps and
+    // resets the table every kProfileIntervalFrames frames.
+    void OnFrame(bool upscaleOn)
+    {
+        if (!upscaleOn)
+            return;
+        if (FrameCount.fetch_add(1, std::memory_order_relaxed) + 1 < kProfileIntervalFrames)
+            return;
+        FrameCount.store(0, std::memory_order_relaxed);
+        Dump();
+        Reset();
+    }
+
+    void Dump()
+    {
+        auto ms = [](u64 ns) { return (double)ns / 1e6; };
+        u64 hits = CacheHits.load(), misses = CacheMisses.load();
+        u64 chits = ContentCacheHits.load(), cmisses = ContentCacheMisses.load();
+        u64 fullRuns = cmisses; // pipeline only actually runs on a content-cache miss
+
+        char buf[2048];
+        int n = 0;
+        n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
+        n += snprintf(buf+n, sizeof(buf)-n, "pool worker threads: %u (0 = fallback, single-threaded)\n", RowWorkerPool::Get().ThreadCount());
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache hits",     (unsigned long long)chits,   "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "content-cache misses",   (unsigned long long)cmisses, "-");
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  decode",              (unsigned long long)fullRuns, ms(DecodeNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  eagle upscale 4x",    (unsigned long long)fullRuns, ms(UpscaleNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "  sharpen+saturate",    (unsigned long long)fullRuns, ms(SharpenNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL new-array allocs",   (unsigned long long)NewGLArrayAllocs.load(), ms(GLAllocNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12.2f\n", "GL uploads",            (unsigned long long)GLUploads.load(), ms(GLUploadNs.load()));
+        n += snprintf(buf+n, sizeof(buf)-n, "===============================================\n");
+        (void)n;
+
+        fputs(buf, stdout);
+        fflush(stdout);
+        FILE* f = fopen("ixranium_profile.log", "a");
+        if (f) { fputs(buf, f); fclose(f); }
+    }
+
+    void Reset()
+    {
+        CacheHits = 0; CacheMisses = 0;
+        ContentCacheHits = 0; ContentCacheMisses = 0;
+        NewGLArrayAllocs = 0; GLUploads = 0;
+        DecodeNs = 0; UpscaleNs = 0; SharpenNs = 0; GLAllocNs = 0; GLUploadNs = 0;
+    }
+};
+
+
 template <typename Fn>
 inline void ParallelForRows(u32 rowCount, Fn&& fn)
 {
@@ -737,9 +739,14 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
     auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
     auto clampByteF = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
-    auto smoothstepf = [](float lo, float hi, float x) -> float
+    // (x - lo) * invRange instead of (x - lo) / (hi - lo): integer/float
+    // division is meaningfully slower than multiplication on most CPUs,
+    // and lo/hi are the same two constants (4, 28) every call, so the
+    // reciprocal is easy to hoist out of the per-pixel loop.
+    const float invRange = 1.0f / (28.0f - 4.0f);
+    auto smoothstepf = [invRange](float lo, float x) -> float
     {
-        float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
+        float t = std::clamp((x - lo) * invRange, 0.0f, 1.0f);
         return t * t * (3.0f - 2.0f * t);
     };
 
@@ -757,16 +764,25 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
                 // 4 neighbours twice per channel (once for edgeMag, once
                 // for the actual sharpen), doubling this pass's per-
                 // pixel arithmetic for no reason.
+                //
+                // ">> 2" instead of "/ 4": the sum of four 0-255 bytes
+                // is always non-negative, so an unsigned-style right
+                // shift gives the exact same result as the division -
+                // but a plain signed `int` division by a non-power-of-2-
+                // looking constant makes the compiler emit extra
+                // instructions to handle a negative dividend that can
+                // never actually occur here. The shift sidesteps that
+                // for free.
                 int cc[3], avgv[3];
                 int edgeMag = 0;
                 for (int i = 0; i < 3; i++)
                 {
                     int shift = i * 8;
                     cc[i] = channel(c, shift);
-                    avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                    avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) >> 2;
                     edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
                 }
-                float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
+                float edgeFactor = smoothstepf(4.0f, (float)edgeMag);
                 float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
 
                 u32 sharpened = 0;
