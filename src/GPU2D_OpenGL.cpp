@@ -35,6 +35,9 @@ using Platform::LogLevel;
 #include "OpenGL_shaders/2DSpriteFS.h"
 #include "OpenGL_shaders/2DCompositorVS.h"
 #include "OpenGL_shaders/2DCompositorFS.h"
+#include "OpenGL_shaders/2DBGUpscaleVS.h"
+#include "OpenGL_shaders/2DBGUpscaleFS.h"
+#include "GPU3D_Texcache.h" // melonDS::IxraniumTexUpscaleEnabled
 
 
 
@@ -84,6 +87,13 @@ bool GLRenderer2D::InitShaders()
                                               {{"oColor", 0}}))
         return false;
 
+    if (!OpenGL::CompileVertexFragmentProgram(BGUpscaleShader,
+                                              k2DBGUpscaleVS, k2DBGUpscaleFS,
+                                              "2DBGUpscaleShader",
+                                              {{"vPosition", 0}},
+                                              {{"oColor", 0}}))
+        return false;
+
     // set up uniforms
 
     glUseProgram(LayerPreShader);
@@ -125,6 +135,13 @@ bool GLRenderer2D::InitShaders()
     glUniformBlockBinding(SpriteShader, uniloc, 24);
 
     SpriteRenderTransULoc = glGetUniformLocation(SpriteShader, "uRenderTransparent");
+
+
+    glUseProgram(BGUpscaleShader);
+
+    uniloc = glGetUniformLocation(BGUpscaleShader, "SrcTex");
+    glUniform1i(uniloc, 0);
+    BGUpscaleSrcSizeULoc = glGetUniformLocation(BGUpscaleShader, "uSrcSize");
 
 
     glUseProgram(CompositorShader);
@@ -187,10 +204,12 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
     SpritePreShader = other.SpritePreShader;
     SpriteShader = other.SpriteShader;
     CompositorShader = other.CompositorShader;
+    BGUpscaleShader = other.BGUpscaleShader;
 
     LayerPreCurBGULoc = other.LayerPreCurBGULoc;
     SpriteRenderTransULoc = other.SpriteRenderTransULoc;
     CompositorScaleULoc = other.CompositorScaleULoc;
+    BGUpscaleSrcSizeULoc = other.BGUpscaleSrcSizeULoc;
 
     MosaicTex = other.MosaicTex;
 
@@ -291,6 +310,38 @@ bool GLRenderer2D::Init()
         }
     }
 
+    // "Ixranium Graphics" (2D BG layers, Faz A): a second pool, same
+    // 22 slots/sizing as above but 4x larger on each axis - this is
+    // where PrerenderLayer's upscale pass (see there) writes to, and
+    // what the compositor samples from instead of the native-size
+    // texture above when melonDS::IxraniumTexUpscaleEnabled is on.
+    // Allocated unconditionally alongside the native pool (like the
+    // rest of this function's eager allocation) rather than lazily on
+    // first toggle-on, for the same reason the 3D scratch buffers are:
+    // simpler, one predictable allocation point, at the cost of some
+    // VRAM even while the feature is off.
+    glGenTextures(22, AllBGLayerUpTex);
+    glGenFramebuffers(22, AllBGLayerUpFB);
+
+    l = 0;
+    for (int j = 0; j < 8; j++)
+    {
+        const u16* sz = bgsizes[j];
+
+        for (int k = 0; k < sz[2]; k++)
+        {
+            glBindTexture(GL_TEXTURE_2D, AllBGLayerUpTex[l]);
+            glDefaultTexParams(GL_TEXTURE_2D);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, sz[0]*4, sz[1]*4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, AllBGLayerUpFB[l]);
+            glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, AllBGLayerUpTex[l], 0);
+            glDrawBuffer(GL_COLOR_ATTACHMENT0);
+
+            l++;
+        }
+    }
+
     // generate texture to hold pre-rendered sprites
 
     glGenTextures(1, &SpriteTex);
@@ -361,6 +412,7 @@ void GLRenderer2D::DeleteShaders()
     glDeleteProgram(SpritePreShader);
     glDeleteProgram(SpriteShader);
     glDeleteProgram(CompositorShader);
+    glDeleteProgram(BGUpscaleShader);
 
     glDeleteTextures(1, &MosaicTex);
 }
@@ -383,6 +435,8 @@ GLRenderer2D::~GLRenderer2D()
 
     glDeleteTextures(22, AllBGLayerTex);
     glDeleteFramebuffers(22, AllBGLayerFB);
+    glDeleteTextures(22, AllBGLayerUpTex);
+    glDeleteFramebuffers(22, AllBGLayerUpFB);
 
     glDeleteTextures(1, &SpriteTex);
     glDeleteFramebuffers(1, &SpriteFB);
@@ -1116,6 +1170,8 @@ void GLRenderer2D::UpdateLayerConfig()
             int n = BGBaseIndex[0][bgcnt >> 14] + layer;
             BGLayerTex[layer] = AllBGLayerTex[n];
             BGLayerFB[layer] = AllBGLayerFB[n];
+            BGLayerUpTex[layer] = AllBGLayerUpTex[n];
+            BGLayerUpFB[layer] = AllBGLayerUpFB[n];
 
             BGVRAMRange[layer][1] = tilesz;
             BGVRAMRange[layer][3] = mapsz;
@@ -1139,6 +1195,8 @@ void GLRenderer2D::UpdateLayerConfig()
             int n = BGBaseIndex[1][bgcnt >> 14] + layer - 2;
             BGLayerTex[layer] = AllBGLayerTex[n];
             BGLayerFB[layer] = AllBGLayerFB[n];
+            BGLayerUpTex[layer] = AllBGLayerUpTex[n];
+            BGLayerUpFB[layer] = AllBGLayerUpFB[n];
 
             BGVRAMRange[layer][1] = 0x4000;
             BGVRAMRange[layer][3] = mapsz;
@@ -1219,6 +1277,8 @@ void GLRenderer2D::UpdateLayerConfig()
                 int n = BGBaseIndex[2][bgcnt >> 14] + layer - 2;
                 BGLayerTex[layer] = AllBGLayerTex[n];
                 BGLayerFB[layer] = AllBGLayerFB[n];
+                BGLayerUpTex[layer] = AllBGLayerUpTex[n];
+                BGLayerUpFB[layer] = AllBGLayerUpFB[n];
             }
             else
             {
@@ -1247,6 +1307,8 @@ void GLRenderer2D::UpdateLayerConfig()
                 int n = BGBaseIndex[1][bgcnt >> 14] + layer - 2;
                 BGLayerTex[layer] = AllBGLayerTex[n];
                 BGLayerFB[layer] = AllBGLayerFB[n];
+                BGLayerUpTex[layer] = AllBGLayerUpTex[n];
+                BGLayerUpFB[layer] = AllBGLayerUpFB[n];
 
                 BGVRAMRange[layer][1] = 0x10000;
                 BGVRAMRange[layer][3] = mapsz;
@@ -1275,6 +1337,8 @@ void GLRenderer2D::UpdateLayerConfig()
             int n = BGBaseIndex[3][bgcnt >> 14];
             BGLayerTex[layer] = AllBGLayerTex[n];
             BGLayerFB[layer] = AllBGLayerFB[n];
+            BGLayerUpTex[layer] = AllBGLayerUpTex[n];
+            BGLayerUpFB[layer] = AllBGLayerUpFB[n];
 
             BGVRAMRange[layer][0] = 0xFFFFFFFF;
             BGVRAMRange[layer][1] = 0xFFFFFFFF;
@@ -1610,6 +1674,40 @@ void GLRenderer2D::PrerenderLayer(int layer)
     glBindBuffer(GL_ARRAY_BUFFER, Parent.RectVtxBuffer);
     glBindVertexArray(Parent.RectVtxArray);
     glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+    // "Ixranium Graphics" (2D BG layers, Faz A). Runs right after the
+    // normal decode above, reading its output (BGLayerTex[layer],
+    // still bound as this framebuffer's colour attachment) and writing
+    // the 4x upscaled+sharpened+saturated result into BGLayerUpFB -
+    // never touches the final composited screen (see RenderScreen,
+    // which is what picks BGLayerUpTex over BGLayerTex when this is
+    // on, further downstream from here).
+    //
+    // The caller (UpdateAndRender) bound LayerPreShader and textures 0/1
+    // (VRAMTex_BG/PalTex_BG) ONCE before its loop over all 4 layers, not
+    // per-call - since this pass needs its own program and its own unit-0
+    // texture, both get restored before returning so the next
+    // PrerenderLayer() call in that loop still sees what it expects.
+    if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
+    {
+        glUseProgram(BGUpscaleShader);
+        glUniform2i(BGUpscaleSrcSizeULoc, cfg.Size[0], cfg.Size[1]);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, BGLayerTex[layer]);
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, BGLayerUpFB[layer]);
+        glViewport(0, 0, cfg.Size[0]*4, cfg.Size[1]*4);
+
+        glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+        // restore state the calling loop's next iteration expects
+        glUseProgram(LayerPreShader);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, PalTex_BG);
+    }
 }
 
 
@@ -1806,9 +1904,21 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
         glActiveTexture(GL_TEXTURE0 + i);
 
         if ((i == 0) && (DispCnt & (1<<3)))
+        {
             glBindTexture(GL_TEXTURE_2D, Parent.OutputTex3D);
+        }
         else
-            glBindTexture(GL_TEXTURE_2D, BGLayerTex[i]);
+        {
+            // "Ixranium Graphics" (2D BG layers, Faz A): sample the
+            // upscaled+sharpened+saturated copy instead of the native
+            // one when enabled - BGLayerUpTex is a genuinely separate
+            // GL texture object (not just a different view of the same
+            // one), so its own wrap mode has to be set below too, not
+            // just BGLayerTex's.
+            GLuint tex = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed)
+                       ? BGLayerUpTex[i] : BGLayerTex[i];
+            glBindTexture(GL_TEXTURE_2D, tex);
+        }
 
         GLint wrapmode = LayerConfig.uBGConfig[i].Clamp ? GL_CLAMP_TO_BORDER : GL_REPEAT;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapmode);

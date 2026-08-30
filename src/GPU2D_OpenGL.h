@@ -101,6 +101,21 @@ private:
     GLuint BGLayerFB[4];
     GLuint BGLayerTex[4];
 
+    // "Ixranium Graphics" (2D BG layers - Faz A). A second, 4x-larger
+    // pool paralleling AllBGLayerFB/Tex above, one-to-one by index -
+    // see BGUpscaleShader / PrerenderLayer in the .cpp. Only actually
+    // rendered into and sampled from when
+    // melonDS::IxraniumTexUpscaleEnabled is on; otherwise the compositor
+    // keeps reading BGLayerTex (native, unmodified) exactly as before.
+    GLuint AllBGLayerUpFB[22];
+    GLuint AllBGLayerUpTex[22];
+
+    GLuint BGLayerUpFB[4];
+    GLuint BGLayerUpTex[4];
+
+    GLuint BGUpscaleShader;
+    GLint BGUpscaleSrcSizeULoc;
+
     GLuint SpriteFB;
     GLuint SpriteTex;
 

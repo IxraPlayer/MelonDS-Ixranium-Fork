@@ -1,6 +1,8 @@
 set(OPENGL_SHADER_FILES
     2DLayerPreVS.glsl
     2DLayerPreFS.glsl
+    2DBGUpscaleVS.glsl
+    2DBGUpscaleFS.glsl
     2DSpritePreVS.glsl
     2DSpritePreFS.glsl
     2DSpriteVS.glsl
