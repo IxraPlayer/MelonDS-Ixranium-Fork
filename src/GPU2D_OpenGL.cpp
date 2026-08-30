@@ -1690,6 +1690,9 @@ void GLRenderer2D::PrerenderLayer(int layer)
     // PrerenderLayer() call in that loop still sees what it expects.
     if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
     {
+        static int dbgcount = 0;
+        if (dbgcount++ % 120 == 0)
+            printf("[IXRANIUM DEBUG] 2D BG upscale RAN, layer %d, size %dx%d\n", layer, cfg.Size[0], cfg.Size[1]);
         glUseProgram(BGUpscaleShader);
         glUniform2i(BGUpscaleSrcSizeULoc, cfg.Size[0], cfg.Size[1]);
 

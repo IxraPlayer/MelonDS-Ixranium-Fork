@@ -3131,6 +3131,7 @@ void MainWindow::onChangeLimitFramerate(bool checked)
 
 void MainWindow::onChangeIxraniumGraphics(bool checked)
 {
+    printf("[IXRANIUM DEBUG] toggle clicked, checked=%d\n", checked);
     globalCfg.SetBool("3D.IxraniumTexUpscale", checked);
     melonDS::IxraniumTexUpscaleEnabled = checked;
 

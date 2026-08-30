@@ -677,6 +677,7 @@ public:
         u32* uploadData = DecodingBuffer;
         if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
         {
+            printf("[IXRANIUM DEBUG] 3D texture upscale RAN: %ux%u -> %ux%u\n", width, height, width*4, height*4);
             EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
             uploadW = width * 4;
             uploadH = height * 4;
