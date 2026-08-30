@@ -791,27 +791,47 @@ public:
             entry.TexPalHash = MaskedHash(GPU.VRAMFlat_TexPal, sizeof(GPU.VRAMFlat_TexPal),
                 entry.TexPalStart, entry.TexPalSize);
 
-        // "Ixranium Graphics": upscale the just-decoded texel data 3x
-        // before it goes anywhere near the GPU or the array-bucket
-        // system below. uploadW/uploadH/uploadData (not width/height/
-        // DecodingBuffer) are what the rest of this function actually
-        // stores and uploads from here on - width/height above stay
-        // exactly as they were for the VRAM-address decode math, which
-        // must stay tied to the DS's real, native texture dimensions.
+        // Content-based cache lookup: entry.TextureHash/TexPalHash are a
+        // hash of the raw VRAM bytes this texture decodes from, which
+        // is deterministic (same VRAM bytes -> same decode -> same
+        // upscale result). Sprites that get re-uploaded to a *different*
+        // VRAM address every frame (double-buffering, animation-frame
+        // cycling) get a different `key`/cache-miss above every time,
+        // even though their actual pixel content repeats - without this,
+        // the full 4x upscale+sharpen+saturate pipeline (the expensive
+        // part) reruns every single frame for those sprites. This skips
+        // that CPU work whenever the content has been seen before,
+        // regardless of which VRAM address it's sitting at right now.
         u32 uploadW = width, uploadH = height;
         u32* uploadData = DecodingBuffer;
-        if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
+        bool upscaleOn = IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed);
+        u64 contentKey = 0;
+        bool gotFromContentCache = false;
+
+        if (upscaleOn)
+        {
+            contentKey = entry.TextureHash[0] ^ (entry.TextureHash[1] * 0x9E3779B97F4A7C15ULL)
+                       ^ (entry.TexPalHash * 0xC2B2AE3D27D4EB4FULL) ^ ((u64)fmt << 56);
+
+            auto cit = UpscaleResultCache.find(contentKey);
+            if (cit != UpscaleResultCache.end())
+            {
+                uploadW = width * 4;
+                uploadH = height * 4;
+                uploadData = cit->second.data();
+                gotFromContentCache = true;
+            }
+        }
+
+        if (upscaleOn && !gotFromContentCache)
         {
             // NOTE: the old unconditional printf() here (once per
-            // cache-miss texture) was the single biggest FPS cost of
-            // this feature - it's a synchronous stdout write, and in
-            // any game that invalidates/uploads textures often (VRAM
-            // bank swaps, animated/streamed textures, UI redraws) it
-            // fires constantly. Removed. If you need it back for
-            // debugging, guard it behind a build flag, never ship it
-            // unconditional in a hot path.
+            // cache-miss texture) was a big FPS cost by itself - a
+            // synchronous stdout write firing on every cache-miss.
+            // Removed. If you need it back for debugging, guard it
+            // behind a build flag, never ship it unconditional here.
             // Eagle 4x upscale (see EagleUpscale4x's own comment) -
-            // reverted back from the smooth-bilinear 2x experiment,
+            // back to this after the smooth-bilinear 2x experiment,
             // which fixed neither the blur complaint nor the FPS issue.
             EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
             uploadW = width * 4;
@@ -825,6 +845,20 @@ public:
                                        kSharpenStrength, kSaturationBoost);
 
             uploadData = SharpenBuffer;
+
+            // Cache this result under its content hash so the next
+            // cache-miss with the *same* underlying texture data (just
+            // at a different VRAM address/texParam - the sprite
+            // double-buffering/animation case) can skip straight to
+            // reusing it instead of redoing the whole upscale pipeline.
+            // Capped so a game with huge numbers of genuinely unique
+            // textures can't grow this unbounded; simple over clever -
+            // this is a perf cache, not a correctness requirement, so
+            // just clear and start refilling once full.
+            if (UpscaleResultCache.size() >= kUpscaleResultCacheCap)
+                UpscaleResultCache.clear();
+            UpscaleResultCache.emplace(contentKey,
+                std::vector<u32>(uploadData, uploadData + (size_t)uploadW * uploadH));
         }
 
         auto& texArrays = TexArrays[widthLog2][heightLog2];
@@ -873,6 +907,7 @@ public:
             }
         }
         Cache.clear();
+        UpscaleResultCache.clear();
     }
 
 private:
@@ -897,6 +932,11 @@ private:
         u64 TexPalHash;
     };
     std::unordered_map<u64, TexCacheEntry> Cache;
+
+    // Content-hash -> already-upscaled pixel data (see the lookup in
+    // GetTexture). Capped at kUpscaleResultCacheCap entries.
+    std::unordered_map<u64, std::vector<u32>> UpscaleResultCache;
+    static constexpr size_t kUpscaleResultCacheCap = 256;
 
     TexLoaderT TexLoader;
 
