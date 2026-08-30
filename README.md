@@ -10,7 +10,7 @@
   <a href="https://github.com/IxraPlayer/MelonDS-Ixranium-Fork/actions/workflows/build-bsd.yml?query=event%3Apush"><img src="https://github.com/IxraPlayer/MelonDS-Ixranium-Fork/actions/workflows/build-bsd.yml/badge.svg" /></a>
 </p>
 
-An Unofficial Fork Of MelonDS
+An Unofficial Fork Of MelonDS.
 
 DS emulator, sorta
 
