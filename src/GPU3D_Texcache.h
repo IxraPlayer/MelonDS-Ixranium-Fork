@@ -810,23 +810,19 @@ public:
             // fires constantly. Removed. If you need it back for
             // debugging, guard it behind a build flag, never ship it
             // unconditional in a hot path.
-            // SmoothUpscale2x (true bilinear, see its own comment) -
-            // deliberately used instead of the Eagle family here: Eagle
-            // preserves flat pixel blocks and only rounds detected
-            // corners (a "pixel art" look), whereas the goal here is no
-            // visible pixels/blocks anywhere, just continuous curves.
-            SmoothUpscale2x(DecodingBuffer, width, height, UpscaleBuffer);
-            uploadW = width * 2;
-            uploadH = height * 2;
+            // Eagle 4x upscale (see EagleUpscale4x's own comment) -
+            // reverted back from the smooth-bilinear 2x experiment,
+            // which fixed neither the blur complaint nor the FPS issue.
+            EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
+            uploadW = width * 4;
+            uploadH = height * 4;
 
-            // Sharpen kept very light here - the whole point of the
-            // smooth upscale above is zero visible blockiness, and
-            // sharpening un-does some of that smoothing by definition.
-            // A small amount still keeps text/edges from reading as
-            // blurry mush; kSharpenStrength itself is untouched in case
-            // Eagle mode is ever re-enabled.
+            // Sharpen + saturate combined into one pass over the buffer
+            // instead of two (see TextureSharpenAndSaturate) - same
+            // output, one less full read/write sweep over up to
+            // 4096x4096 pixels per cache-miss texture.
             TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
-                                       kSharpenStrength * 0.5f, kSaturationBoost);
+                                       kSharpenStrength, kSaturationBoost);
 
             uploadData = SharpenBuffer;
         }
