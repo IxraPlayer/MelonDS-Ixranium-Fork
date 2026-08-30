@@ -409,6 +409,76 @@ inline void ApplySaturationBoost(u32* buf, u32 w, u32 h, float factor)
     }
 }
 
+// Combined sharpen+saturation single pass: same math as TextureSharpen
+// followed by ApplySaturationBoost, but applies the saturation step to
+// each pixel immediately after computing its sharpened value instead of
+// making a second full read/write pass over the whole buffer. Halves
+// memory traffic for the post-upscale finishing step (this is the part
+// that actually runs per cache-miss texture - see GetTexture) with a
+// byte-for-byte identical result, since the two passes never touch each
+// other's inputs (saturation is per-pixel, sharpen already finished
+// reading src's neighbours before dst[i] is written).
+inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
+                                       float sharpenStrength, float satFactor)
+{
+    auto at = [&](u32 x, u32 y) -> u32
+    {
+        if (x >= w) x = w - 1;
+        if (y >= h) y = h - 1;
+        return src[y * w + x];
+    };
+
+    auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
+    auto clampByteF = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
+    auto smoothstepf = [](float lo, float hi, float x) -> float
+    {
+        float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    };
+
+    for (u32 y = 0; y < h; y++)
+    {
+        for (u32 x = 0; x < w; x++)
+        {
+            u32 c = at(x, y);
+            u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
+
+            int edgeMag = 0;
+            for (int shift = 0; shift < 24; shift += 8)
+            {
+                int cc = channel(c, shift);
+                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                edgeMag = std::max(edgeMag, std::abs(cc - avg));
+            }
+            float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
+            float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
+
+            u32 sharpened = 0;
+            for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha
+            {
+                int cc = channel(c, shift);
+                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                int v = cc + (int)((float)(cc - avg) * effectiveStrength);
+                sharpened |= clampByte(v) << shift;
+            }
+            sharpened |= c & 0xFF000000;
+
+            // Saturation boost, applied immediately to this pixel's
+            // freshly-sharpened value - equivalent to running
+            // ApplySaturationBoost as a separate pass over dst afterwards.
+            float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
+            float luma = 0.299f*r + 0.587f*g + 0.114f*b;
+            u32 out = clampByteF(luma + (r - luma) * satFactor)
+                    | (clampByteF(luma + (g - luma) * satFactor) << 8)
+                    | (clampByteF(luma + (b - luma) * satFactor) << 16)
+                    | (sharpened & 0xFF000000);
+
+            dst[y * w + x] = out;
+        }
+    }
+}
+
 
 
 inline u32 TextureWidth(u32 texparam)
@@ -677,24 +747,24 @@ public:
         u32* uploadData = DecodingBuffer;
         if (IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
         {
-            printf("[IXRANIUM DEBUG] 3D texture upscale RAN: %ux%u -> %ux%u\n", width, height, width*4, height*4);
+            // NOTE: the old unconditional printf() here (once per
+            // cache-miss texture) was the single biggest FPS cost of
+            // this feature - it's a synchronous stdout write, and in
+            // any game that invalidates/uploads textures often (VRAM
+            // bank swaps, animated/streamed textures, UI redraws) it
+            // fires constantly. Removed. If you need it back for
+            // debugging, guard it behind a build flag, never ship it
+            // unconditional in a hot path.
             EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
             uploadW = width * 4;
             uploadH = height * 4;
-            uploadData = UpscaleBuffer;
 
-            // Sharpening always runs immediately after (never before -
-            // see TextureSharpen's own comment) the upscale, on its
-            // output - both are part of the one "Ixranium Graphics"
-            // toggle rather than a separate switch.
-            TextureSharpen(UpscaleBuffer, uploadW, uploadH, SharpenBuffer, kSharpenStrength);
-
-            // Saturation boost last, in-place on the sharpened result -
-            // order doesn't matter relative to sharpening (it doesn't
-            // touch local contrast, sharpening doesn't touch colourfulness)
-            // but running it after means it's nudging the exact colours
-            // that will actually be uploaded.
-            ApplySaturationBoost(SharpenBuffer, uploadW, uploadH, kSaturationBoost);
+            // Sharpen + saturate combined into one pass over the buffer
+            // instead of two (see TextureSharpenAndSaturate) - same
+            // output, one less full read/write sweep over up to
+            // 4096x4096 pixels per cache-miss texture.
+            TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
+                                       kSharpenStrength, kSaturationBoost);
 
             uploadData = SharpenBuffer;
         }
