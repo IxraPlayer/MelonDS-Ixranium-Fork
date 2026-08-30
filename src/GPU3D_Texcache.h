@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -731,13 +732,47 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
 {
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
     auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
-    auto clampByteF = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
     const float invRange = 1.0f / (28.0f - 4.0f);
     auto smoothstepf = [invRange](float lo, float x) -> float
     {
         float t = std::clamp((x - lo) * invRange, 0.0f, 1.0f);
         return t * t * (3.0f - 2.0f * t);
     };
+
+    // Fixed-point (Q12, i.e. scaled by 4096) rewrite of the per-pixel
+    // math. Real hardware testing showed the branch-free rewrite above
+    // this comment made ~no measurable difference on the actual
+    // problem: the cost isn't the neighbour-fetch bounds checks, it's
+    // the scalar float work itself (float<->int conversions, float
+    // multiplies, a division) running on every single one of up to 16x
+    // more pixels than the upscale step touches. Two things make an
+    // integer rewrite possible here without touching the visible
+    // result in any meaningful way:
+    //  1. edgeMag (the max per-channel |pixel - neighbour average|) is
+    //     mathematically bounded to 0-255 - it's a difference of two
+    //     values already in that range. That means edgeFactor/
+    //     effectiveStrength, which depend on edgeMag and the (per-call
+    //     constant) sharpenStrength, only ever take 256 distinct
+    //     values for this whole call. Precomputing all 256 up front
+    //     (still using the exact same float smoothstep formula, just
+    //     256 times instead of millions of times) turns the per-pixel
+    //     work into a table lookup instead of a float computation.
+    //  2. The luma weights (0.299/0.587/0.114) round to 76/150/29 out
+    //     of 256 with sub-1/255 error - standard practice, invisible.
+    // Net effect: the per-pixel loop below does zero floating-point
+    // arithmetic. The only visible cost is up to ~1-unit-of-255
+    // rounding differences versus the float version (fixed-point
+    // truncation vs float round-to-nearest) - not something any eye
+    // will pick out of a texture, in exchange for removing the actual
+    // per-pixel bottleneck the profiler pointed at.
+    int32_t effStrengthQ12[256];
+    for (int e = 0; e <= 255; e++)
+    {
+        float edgeFactor = smoothstepf(4.0f, (float)e);
+        float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
+        effStrengthQ12[e] = (int32_t)std::lround(effectiveStrength * 4096.0f);
+    }
+    const int32_t satFactorQ12 = (int32_t)std::lround(satFactor * 4096.0f);
 
     // Shared per-pixel math (sharpen + saturate), given the pixel and
     // its 4 already-fetched neighbours. Used by both the branch-free
@@ -755,22 +790,21 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
             avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) >> 2;
             edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
         }
-        float edgeFactor = smoothstepf(4.0f, (float)edgeMag);
-        float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
+        int32_t strQ12 = effStrengthQ12[edgeMag];
 
         u32 sharpened = 0;
         for (int i = 0; i < 3; i++)
         {
-            int v = cc[i] + (int)((float)(cc[i] - avgv[i]) * effectiveStrength);
+            int v = cc[i] + ((int)(cc[i] - avgv[i]) * strQ12 >> 12);
             sharpened |= clampByte(v) << (i * 8);
         }
         sharpened |= c & 0xFF000000;
 
-        float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
-        float luma = 0.299f*r + 0.587f*g + 0.114f*b;
-        return clampByteF(luma + (r - luma) * satFactor)
-             | (clampByteF(luma + (g - luma) * satFactor) << 8)
-             | (clampByteF(luma + (b - luma) * satFactor) << 16)
+        int r = channel(sharpened, 0), g = channel(sharpened, 8), b = channel(sharpened, 16);
+        int luma = (76*r + 150*g + 29*b) >> 8;
+        return clampByte(luma + ((r - luma) * satFactorQ12 >> 12))
+             | (clampByte(luma + ((g - luma) * satFactorQ12 >> 12)) << 8)
+             | (clampByte(luma + ((b - luma) * satFactorQ12 >> 12)) << 16)
              | (sharpened & 0xFF000000);
     };
 
@@ -918,6 +952,7 @@ public:
     bool Update(u8& clrBitmapDirty)
     {
         IxraniumProfiler::Get().OnFrame(IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed));
+        UpscalesThisFrame = 0;
 
         auto textureDirty = GPU.VRAMDirty_Texture.DeriveState(GPU.VRAMMap_Texture, GPU);
         auto texPalDirty = GPU.VRAMDirty_TexPal.DeriveState(GPU.VRAMMap_TexPal, GPU);
@@ -1136,8 +1171,17 @@ public:
             }
         }
 
-        if (upscaleOn && !gotFromContentCache)
+        // Per-frame budget check (see kMaxUpscalesPerFrame's comment) -
+        // content-cache hits above don't touch this budget at all
+        // (they're already cheap, just a lookup), only genuine full
+        // pipeline runs count against it.
+        bool overBudget = upscaleOn && !gotFromContentCache
+                        && UpscalesThisFrame >= kMaxUpscalesPerFrame;
+
+        if (upscaleOn && !gotFromContentCache && !overBudget)
         {
+            UpscalesThisFrame++;
+
             // NOTE: the old unconditional printf() here (once per
             // cache-miss texture) was a big FPS cost by itself - a
             // synchronous stdout write firing on every cache-miss.
@@ -1281,6 +1325,23 @@ private:
     // GetTexture). Capped at kUpscaleResultCacheCap entries.
     std::unordered_map<u64, std::vector<u32>> UpscaleResultCache;
     static constexpr size_t kUpscaleResultCacheCap = 256;
+
+    // Per-frame budget for how many textures get the full Ixranium
+    // upscale+sharpen pipeline. A scene that suddenly needs many new
+    // textures at once (character-select wheel populating, a big fight
+    // scene loading in) can otherwise dump dozens of cache-misses into
+    // a single frame - the profiler showed 29 misses costing 892ms in
+    // one 60-frame window, i.e. that ONE frame briefly needed ~30ms of
+    // CPU just for its own share of that, blowing the ~16.6ms/frame
+    // budget for 60 FPS well past a single frame. Capping how many get
+    // the expensive treatment per frame doesn't reduce the total work,
+    // but it spreads a single 30ms+ frame-time spike (a visible stutter)
+    // across several frames instead (each comfortably under budget).
+    // Overflow textures are shown at native resolution for that frame
+    // and retried in full on their next cache-miss - a few frames of a
+    // less-upscaled texture during a sudden burst, not a freeze.
+    static constexpr u32 kMaxUpscalesPerFrame = 6;
+    u32 UpscalesThisFrame = 0;
 
     TexLoaderT TexLoader;
 
