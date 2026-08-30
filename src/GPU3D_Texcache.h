@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <assert.h>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <unordered_map>
 #include <vector>
@@ -295,6 +296,60 @@ inline void EagleUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
             out[1] = topRight;
             out[dstW + 0] = bottomLeft;
             out[dstW + 1] = bottomRight;
+        }
+    }
+}
+
+// Smooth (true bilinear) 2x upscale - unlike EagleUpscale2x/3x/4x
+// above, this does NOT try to preserve flat pixel blocks or only round
+// detected corners. Every output pixel is a genuine blend of its
+// nearest source pixels, everywhere, so the result has no visible flat
+// "blocks" anywhere - continuous curves/gradients instead of a
+// pixel-art look. This is what you want when the goal is "don't see
+// pixels at all" rather than "keep pixel art crisp but round its
+// corners".
+inline void SmoothUpscale2x(const u32* src, u32 srcW, u32 srcH, u32* dst)
+{
+    u32 dstW = srcW * 2, dstH = srcH * 2;
+
+    auto at = [&](int x, int y) -> u32
+    {
+        if (x < 0) x = 0; if (x >= (int)srcW) x = srcW - 1;
+        if (y < 0) y = 0; if (y >= (int)srcH) y = srcH - 1;
+        return src[y * srcW + x];
+    };
+    auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+
+    for (u32 y = 0; y < dstH; y++)
+    {
+        // Sample position in source space, offset by half a source
+        // pixel so the 2x2 output block straddles the source pixel
+        // centre - this is what makes every output pixel a genuine
+        // blend rather than 1/4 of them landing exactly on a source
+        // sample (which would leave visible unblended pixels).
+        float sy = (y + 0.5f) / 2.0f - 0.5f;
+        int y0 = (int)std::floor(sy);
+        float ty = sy - y0;
+
+        for (u32 x = 0; x < dstW; x++)
+        {
+            float sx = (x + 0.5f) / 2.0f - 0.5f;
+            int x0 = (int)std::floor(sx);
+            float tx = sx - x0;
+
+            u32 c00 = at(x0, y0),     c10 = at(x0+1, y0);
+            u32 c01 = at(x0, y0+1),   c11 = at(x0+1, y0+1);
+
+            u32 out = 0;
+            for (int shift = 0; shift < 32; shift += 8)
+            {
+                float top = lerp((float)channel(c00, shift), (float)channel(c10, shift), tx);
+                float bot = lerp((float)channel(c01, shift), (float)channel(c11, shift), tx);
+                float v = lerp(top, bot, ty);
+                out |= (u32)std::clamp((int)(v + 0.5f), 0, 255) << shift;
+            }
+            dst[y * dstW + x] = out;
         }
     }
 }
@@ -755,16 +810,23 @@ public:
             // fires constantly. Removed. If you need it back for
             // debugging, guard it behind a build flag, never ship it
             // unconditional in a hot path.
-            EagleUpscale4x(DecodingBuffer, width, height, UpscaleBuffer);
-            uploadW = width * 4;
-            uploadH = height * 4;
+            // SmoothUpscale2x (true bilinear, see its own comment) -
+            // deliberately used instead of the Eagle family here: Eagle
+            // preserves flat pixel blocks and only rounds detected
+            // corners (a "pixel art" look), whereas the goal here is no
+            // visible pixels/blocks anywhere, just continuous curves.
+            SmoothUpscale2x(DecodingBuffer, width, height, UpscaleBuffer);
+            uploadW = width * 2;
+            uploadH = height * 2;
 
-            // Sharpen + saturate combined into one pass over the buffer
-            // instead of two (see TextureSharpenAndSaturate) - same
-            // output, one less full read/write sweep over up to
-            // 4096x4096 pixels per cache-miss texture.
+            // Sharpen kept very light here - the whole point of the
+            // smooth upscale above is zero visible blockiness, and
+            // sharpening un-does some of that smoothing by definition.
+            // A small amount still keeps text/edges from reading as
+            // blurry mush; kSharpenStrength itself is untouched in case
+            // Eagle mode is ever re-enabled.
             TextureSharpenAndSaturate(UpscaleBuffer, uploadW, uploadH, SharpenBuffer,
-                                       kSharpenStrength, kSaturationBoost);
+                                       kSharpenStrength * 0.5f, kSaturationBoost);
 
             uploadData = SharpenBuffer;
         }
