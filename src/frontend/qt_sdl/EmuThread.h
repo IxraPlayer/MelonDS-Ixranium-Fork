@@ -194,6 +194,12 @@ private:
     int autoScreenSizing;
 
     int lastVideoRenderer = -1;
+    // Tracks the Ixranium Graphics toggle across updateRenderer() calls
+    // so a flip can force a Texcache reset (see updateRenderer() in the
+    // .cpp) even when videoRenderer itself hasn't changed - otherwise
+    // SetRenderer() is never called on toggle and every already-cached
+    // texture stays at its old (pre-toggle) resolution forever.
+    int lastIxraniumTexUpscale = -1;
 
     double perfCountsSec;
 

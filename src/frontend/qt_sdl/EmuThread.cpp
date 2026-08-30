@@ -50,6 +50,7 @@
 #include "DSi_I2C.h"
 #include "GPU_Soft.h"
 #include "GPU_OpenGL.h"
+#include "GPU3D_Texcache.h" // melonDS::IxraniumTexUpscaleEnabled
 
 #include "Savestate.h"
 
@@ -888,6 +889,21 @@ void EmuThread::updateRenderer()
     };
 
     nds->GetRenderer().SetRenderSettings(settings);
+
+    // "Ixranium Graphics" toggle: SetRenderer() above only runs when the
+    // 3D.Renderer TYPE itself changes, so it never fires on this toggle
+    // alone - meaning the renderer's Texcache (and every texture already
+    // uploaded under the OLD setting) would otherwise survive untouched.
+    // Force a Reset() here whenever the flag flips, regardless of
+    // videoRenderer, so already-cached textures get re-decoded through
+    // the (now on/off) upscale path instead of staying stuck at whatever
+    // resolution they were first cached at.
+    int ixraniumNow = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) ? 1 : 0;
+    if (ixraniumNow != lastIxraniumTexUpscale)
+    {
+        nds->GetRenderer().Reset();
+        lastIxraniumTexUpscale = ixraniumNow;
+    }
 }
 
 void EmuThread::compileShaders()
