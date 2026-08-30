@@ -135,6 +135,7 @@ bool GLRenderer2D::InitShaders()
     glUniformBlockBinding(SpriteShader, uniloc, 24);
 
     SpriteRenderTransULoc = glGetUniformLocation(SpriteShader, "uRenderTransparent");
+    SpriteScaleULoc = glGetUniformLocation(SpriteShader, "uSpriteScale");
 
 
     glUseProgram(BGUpscaleShader);
@@ -208,6 +209,7 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
 
     LayerPreCurBGULoc = other.LayerPreCurBGULoc;
     SpriteRenderTransULoc = other.SpriteRenderTransULoc;
+    SpriteScaleULoc = other.SpriteScaleULoc;
     CompositorScaleULoc = other.CompositorScaleULoc;
     BGUpscaleSrcSizeULoc = other.BGUpscaleSrcSizeULoc;
 
@@ -354,6 +356,19 @@ bool GLRenderer2D::Init()
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, SpriteTex, 0);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
+    // "Ixranium Graphics" (sprites): 4x-larger twin of the atlas above -
+    // see PrerenderSprites' upscale pass (writes here) and DoRenderSprites
+    // (picks this over SpriteTex when melonDS::IxraniumTexUpscaleEnabled).
+    glGenTextures(1, &SpriteUpTex);
+    glBindTexture(GL_TEXTURE_2D, SpriteUpTex);
+    glDefaultTexParams(GL_TEXTURE_2D);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1024*4, 512*4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &SpriteUpFB);
+    glBindFramebuffer(GL_FRAMEBUFFER, SpriteUpFB);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, SpriteUpTex, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+
     // generate texture to hold final (upscaled) sprites
 
     glGenTextures(1, &OBJLayerTex);
@@ -440,6 +455,8 @@ GLRenderer2D::~GLRenderer2D()
 
     glDeleteTextures(1, &SpriteTex);
     glDeleteFramebuffers(1, &SpriteFB);
+    glDeleteTextures(1, &SpriteUpTex);
+    glDeleteFramebuffers(1, &SpriteUpFB);
 
     glDeleteTextures(1, &OBJLayerTex);
     glDeleteTextures(1, &OBJDepthTex);
@@ -1654,6 +1671,33 @@ void GLRenderer2D::PrerenderSprites()
 
     glBindVertexArray(SpritePreVtxArray);
     glDrawArrays(GL_TRIANGLES, 0, vtxnum);
+
+    // "Ixranium Graphics" (sprites): same BGUpscaleShader pass used for
+    // BG layers (see PrerenderLayer), just pointed at the whole sprite
+    // atlas instead of one BG layer's texture - the atlas is one shared
+    // 1024x512 image for every sprite this frame, so one pass here
+    // covers all of them. Restores SpritePreShader afterward since this
+    // function may run again for a second screen - no texture restore
+    // needed alongside it, unlike PrerenderLayer's loop, because the
+    // caller always rebinds VRAMTex_OBJ/PalTex_OBJ itself right before
+    // each PrerenderSprites() call (see UpdateAndRender).
+    if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
+    {
+        glUseProgram(BGUpscaleShader);
+        glUniform2i(BGUpscaleSrcSizeULoc, 1024, 512);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, SpriteTex);
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpFB);
+        glViewport(0, 0, 1024*4, 512*4);
+
+        glBindBuffer(GL_ARRAY_BUFFER, Parent.RectVtxBuffer);
+        glBindVertexArray(Parent.RectVtxArray);
+        glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+        glUseProgram(SpritePreShader);
+    }
 }
 
 void GLRenderer2D::PrerenderLayer(int layer)
@@ -1739,7 +1783,14 @@ void GLRenderer2D::DoRenderSprites(int line)
     glViewport(0, 0, ScreenW, ScreenH);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, SpriteTex);
+    // "Ixranium Graphics" (sprites): sample the pre-upscaled atlas
+    // instead of the native one when enabled - GetSpritePixel in
+    // 2DSpriteFS.glsl uses uSpriteScale (set right below) to scale its
+    // texelFetch coordinates to match whichever atlas is actually bound
+    // here, so the two must always be set together.
+    bool ixraniumSprites = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed);
+    glBindTexture(GL_TEXTURE_2D, ixraniumSprites ? SpriteUpTex : SpriteTex);
+    glUniform1i(SpriteScaleULoc, ixraniumSprites ? 4 : 1);
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D_ARRAY, Parent.CaptureOutput128Tex);

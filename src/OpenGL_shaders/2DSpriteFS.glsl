@@ -3,6 +3,7 @@
 uniform sampler2D SpriteTex;
 uniform sampler2DArray Capture128Tex;
 uniform sampler2DArray Capture256Tex;
+uniform int uSpriteScale;
 
 struct sOAM
 {
@@ -43,9 +44,18 @@ out vec4 oFlags;
 
 vec4 GetSpritePixel(int sprite, vec2 coord)
 {
-    ivec2 basecoord = ivec2((sprite & 0xF) * 64, (sprite >> 4) * 64);
+    // "Ixranium Graphics": when uSpriteScale is 4 (see DoRenderSprites),
+    // SpriteTex is actually bound to the pre-upscaled 4096x2048 atlas
+    // (built by BGUpscaleShader in PrerenderSprites), which already
+    // contains the smoothed/sharpened/saturated pixels - so all that's
+    // needed here is scaling the cell origin and in-cell offset by the
+    // same factor before the same texelFetch, not a different sampling
+    // approach. Kept as texelFetch (not texture()) either way, same
+    // reason as before: bilinear here would bleed between adjacent
+    // sprites' atlas cells.
+    ivec2 basecoord = ivec2((sprite & 0xF) * 64, (sprite >> 4) * 64) * uSpriteScale;
 
-    return texelFetch(SpriteTex, basecoord + ivec2(coord), 0);
+    return texelFetch(SpriteTex, basecoord + ivec2(coord * float(uSpriteScale)), 0);
 }
 
 void main()

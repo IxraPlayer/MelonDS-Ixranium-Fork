@@ -119,6 +119,17 @@ private:
     GLuint SpriteFB;
     GLuint SpriteTex;
 
+    // "Ixranium Graphics" (sprites/OBJ layer). Same 4x-larger pool
+    // approach as AllBGLayerUpFB/Tex above, but sprites use a single
+    // shared 1024x512 atlas (SpriteTex/SpriteFB) rather than one
+    // texture per BG layer, so there's only one "up" pair here - see
+    // PrerenderSprites (the upscale pass) and 2DSpriteFS.glsl's
+    // uSpriteScale-driven GetSpritePixel (the sampling side) in the
+    // .cpp/.glsl.
+    GLuint SpriteUpFB;
+    GLuint SpriteUpTex;
+    GLint SpriteScaleULoc;
+
     GLuint OBJLayerFB;
     GLuint OBJLayerTex;
     GLuint OBJDepthTex;
