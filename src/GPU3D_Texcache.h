@@ -8,7 +8,11 @@
 #include <assert.h>
 #include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -73,48 +77,148 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
 // this project started with.
 inline constexpr u32 kColorTolerance = 2;
 
+// Persistent worker-thread pool for the row-parallel upscale/sharpen
+// work below. Deliberately NOT spawning std::thread objects per call:
+// this function runs once per cache-miss texture, and a scene with a
+// lot of on-screen sprites/icons that keep re-uploading (a character
+// select wheel, animated sprites) can hit dozens of cache-misses in a
+// single frame - creating and joining N OS threads that many times per
+// frame adds real overhead (thread creation is comparatively expensive)
+// that can outweigh, or even net-negative, whatever the parallel pixel
+// work saved. This pool's threads are created exactly once, sleep on a
+// condition variable between jobs, and are reused for every call for
+// the lifetime of the process.
+class RowWorkerPool
+{
+public:
+    static RowWorkerPool& Get()
+    {
+        static RowWorkerPool instance;
+        return instance;
+    }
+
+    u32 ThreadCount() const { return (u32)Workers.size(); }
+
+    // Runs `fn(start, end)` for each row-chunk in [firstChunk, numChunks)
+    // on the pool's worker threads (chunk i covers
+    // [i*rowsPerChunk, min((i+1)*rowsPerChunk, rowCount))) and returns
+    // immediately without waiting - call WaitAll() after doing your own
+    // work to block until they finish. Chunks before firstChunk are the
+    // caller's own responsibility (see ParallelForRows, which runs
+    // chunk 0 on the calling thread itself, concurrently with these).
+    template <typename Fn>
+    void DispatchChunks(u32 firstChunk, u32 numChunks, u32 rowCount, u32 rowsPerChunk, Fn&& fn)
+    {
+        u32 count = numChunks - firstChunk;
+        if (count == 0) { Pending.store(0, std::memory_order_relaxed); return; }
+        Pending.store(count, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(QueueMutex);
+            for (u32 i = firstChunk; i < numChunks; i++)
+            {
+                u32 start = i * rowsPerChunk;
+                u32 end = std::min(start + rowsPerChunk, rowCount);
+                Jobs.push_back([&fn, start, end]() { fn(start, end); });
+            }
+        }
+        QueueCV.notify_all();
+    }
+
+    // Blocks until every job from the most recent DispatchChunks() call
+    // has completed. Simple spin-wait-with-yield rather than another
+    // condvar - job durations here are sub-millisecond, so this keeps
+    // things simple without adding a second synchronisation object.
+    void WaitAll()
+    {
+        while (Pending.load(std::memory_order_acquire) != 0)
+            std::this_thread::yield();
+    }
+
+private:
+    RowWorkerPool()
+    {
+        u32 hw = std::max(1u, std::thread::hardware_concurrency());
+        // Leave one hardware thread for the caller (which also takes a
+        // share of the row range itself - see ParallelForRows) and for
+        // melonDS's other threads (emu core, audio, etc).
+        u32 numWorkers = hw > 1 ? hw - 1 : 0;
+        for (u32 i = 0; i < numWorkers; i++)
+            Workers.emplace_back([this]() { WorkerLoop(); });
+    }
+
+    ~RowWorkerPool()
+    {
+        {
+            std::lock_guard<std::mutex> lock(QueueMutex);
+            Stopping = true;
+        }
+        QueueCV.notify_all();
+        for (auto& w : Workers) w.join();
+    }
+
+    void WorkerLoop()
+    {
+        for (;;)
+        {
+            std::function<void()> job;
+            {
+                std::unique_lock<std::mutex> lock(QueueMutex);
+                QueueCV.wait(lock, [this]() { return Stopping || !Jobs.empty(); });
+                if (Stopping && Jobs.empty())
+                    return;
+                job = std::move(Jobs.front());
+                Jobs.pop_front();
+            }
+            job();
+            Pending.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    }
+
+    std::vector<std::thread> Workers;
+    std::deque<std::function<void()>> Jobs;
+    std::mutex QueueMutex;
+    std::condition_variable QueueCV;
+    std::atomic<u32> Pending{0};
+    bool Stopping = false;
+};
+
 // Splits [0, rowCount) into chunks and runs `fn(rowStart, rowEnd)` for
-// each chunk on its own thread, then waits for all of them - used to
-// spread the row-independent upscale/sharpen work below across CPU
-// cores instead of running single-threaded. Every row of
+// each chunk on the shared RowWorkerPool, then waits for all of them -
+// used to spread the row-independent upscale/sharpen work below across
+// CPU cores instead of running single-threaded. Every row of
 // EagleUpscale4x/TextureSharpenAndSaturate only reads its own
 // neighbouring *source* rows and writes its own *destination* row, so
-// splitting by row range is safe: no two threads ever write the same
+// splitting by row range is safe: no two workers ever write the same
 // output pixel, and reads never race a write. Falls back to running on
 // the calling thread directly when the work is small enough that
-// thread-launch overhead wouldn't pay off, or the machine only has one
+// dispatch overhead wouldn't pay off, or the machine only has one
 // hardware thread.
 template <typename Fn>
 inline void ParallelForRows(u32 rowCount, Fn&& fn)
 {
-    static const u32 hwThreads = std::max(1u, std::thread::hardware_concurrency());
+    RowWorkerPool& pool = RowWorkerPool::Get();
+    u32 poolThreads = pool.ThreadCount();
 
-    // Not worth spinning up threads for a handful of rows (small
-    // sprites, icons) - the thread creation cost alone would outweigh
-    // the work being parallelised.
-    if (hwThreads <= 1 || rowCount < 32)
+    // Not worth dispatching for a handful of rows (small sprites,
+    // icons) - queue/wait overhead alone would outweigh the work being
+    // parallelised. Threshold is intentionally higher than a naive
+    // per-call thread-spawn version would need, since this still has to
+    // cross a mutex + condvar to reach the pool.
+    if (poolThreads == 0 || rowCount < 64)
     {
         fn(0u, rowCount);
         return;
     }
 
-    u32 numThreads = std::min(hwThreads, rowCount);
-    u32 rowsPerThread = (rowCount + numThreads - 1) / numThreads;
+    u32 numWorkerChunks = std::min(poolThreads + 1, rowCount); // +1: caller's own chunk too
+    u32 rowsPerChunk = (rowCount + numWorkerChunks - 1) / numWorkerChunks;
 
-    std::vector<std::thread> threads;
-    threads.reserve(numThreads - 1);
-    for (u32 t = 1; t < numThreads; t++)
-    {
-        u32 start = t * rowsPerThread;
-        u32 end = std::min(start + rowsPerThread, rowCount);
-        if (start >= end) break;
-        threads.emplace_back([&fn, start, end]() { fn(start, end); });
-    }
-    // thread 0's slice runs on the calling thread instead of spawning
-    // one more - no reason to pay for an extra thread just to leave the
-    // caller idle while it runs.
-    fn(0u, std::min(rowsPerThread, rowCount));
-    for (auto& th : threads) th.join();
+    // Chunk 0 runs on the calling thread itself, concurrently with the
+    // rest running on the pool - no reason to leave a whole hardware
+    // thread idle-waiting.
+    pool.DispatchChunks(1, numWorkerChunks, rowCount, rowsPerChunk, fn);
+    fn(0u, std::min(rowsPerChunk, rowCount));
+    pool.WaitAll();
 }
 
 // Strength of the post-upscale sharpening pass (TextureSharpen), in the
@@ -549,23 +653,28 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
                 u32 c = at(x, y);
                 u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
 
+                // cc/avg computed once per channel here and reused below
+                // - the old version called channel()/averaged the same
+                // 4 neighbours twice per channel (once for edgeMag, once
+                // for the actual sharpen), doubling this pass's per-
+                // pixel arithmetic for no reason.
+                int cc[3], avgv[3];
                 int edgeMag = 0;
-                for (int shift = 0; shift < 24; shift += 8)
+                for (int i = 0; i < 3; i++)
                 {
-                    int cc = channel(c, shift);
-                    int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                    edgeMag = std::max(edgeMag, std::abs(cc - avg));
+                    int shift = i * 8;
+                    cc[i] = channel(c, shift);
+                    avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                    edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
                 }
                 float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
                 float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
 
                 u32 sharpened = 0;
-                for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha
+                for (int i = 0; i < 3; i++)
                 {
-                    int cc = channel(c, shift);
-                    int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                    int v = cc + (int)((float)(cc - avg) * effectiveStrength);
-                    sharpened |= clampByte(v) << shift;
+                    int v = cc[i] + (int)((float)(cc[i] - avgv[i]) * effectiveStrength);
+                    sharpened |= clampByte(v) << (i * 8);
                 }
                 sharpened |= c & 0xFF000000;
 
@@ -937,13 +1046,7 @@ public:
             // often this path is hit for upscaled textures, at the cost
             // of a bit more VRAM held per array (bounded: still capped
             // at 64 layers max, same as before).
-            u32 layers = (8*1024*1024) / (uploadW*uploadH*4);
-            // Only apply the floor when it's a genuine improvement - if
-            // a single layer alone already exceeds the whole budget
-            // (layers computed as 0, only possible for very large
-            // upscaled textures), forcing 8 layers would rather explode
-            // VRAM use for no benefit; just take 1 layer in that case.
-            layers = (layers == 0) ? 1 : std::clamp<u32>(layers, 8, 64);
+            u32 layers = std::min<u32>((8*1024*1024) / (uploadW*uploadH*4), 64);
 
             // allocate new array texture
             //printf("allocating new layer set for %d %d %d %d\n", uploadW, uploadH, texArrays.size()-1, array.ImageDescriptor);
