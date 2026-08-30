@@ -920,7 +920,30 @@ public:
             texArrays.resize(texArrays.size()+1);
             TexHandleT& array = texArrays[texArrays.size()-1];
 
-            u32 layers = std::min<u32>((8*1024*1024) / (uploadW*uploadH*4), 64);
+            // Floor of 8 layers regardless of the byte budget above:
+            // with Ixranium upscaling on, uploadW*uploadH is up to 16x
+            // the native texel area (4x per axis), so the byte-budget
+            // division alone can shrink this to just 1-2 layers for
+            // mid/large textures. That empties the free-layer pool 16x
+            // faster than at native res, which means this whole
+            // GenerateTexture() branch - a synchronous glTexImage3D
+            // allocation of a brand new GPU texture array - fires far
+            // more often. That GL call is genuinely expensive (driver-
+            // side VRAM allocation), and it runs on the render thread,
+            // so it shows up as frame-time stalls with CPU usage that
+            // looks fine (the thread is blocked waiting on the driver,
+            // not doing CPU work) - exactly the "CPU 37%, FPS still low"
+            // symptom. Keeping a minimum of 8 layers per array cuts how
+            // often this path is hit for upscaled textures, at the cost
+            // of a bit more VRAM held per array (bounded: still capped
+            // at 64 layers max, same as before).
+            u32 layers = (8*1024*1024) / (uploadW*uploadH*4);
+            // Only apply the floor when it's a genuine improvement - if
+            // a single layer alone already exceeds the whole budget
+            // (layers computed as 0, only possible for very large
+            // upscaled textures), forcing 8 layers would rather explode
+            // VRAM use for no benefit; just take 1 layer in that case.
+            layers = (layers == 0) ? 1 : std::clamp<u32>(layers, 8, 64);
 
             // allocate new array texture
             //printf("allocating new layer set for %d %d %d %d\n", uploadW, uploadH, texArrays.size()-1, array.ImageDescriptor);
