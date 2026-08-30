@@ -729,20 +729,9 @@ inline void ApplySaturationBoost(u32* buf, u32 w, u32 h, float factor)
 inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
                                        float sharpenStrength, float satFactor)
 {
-    auto at = [&](u32 x, u32 y) -> u32
-    {
-        if (x >= w) x = w - 1;
-        if (y >= h) y = h - 1;
-        return src[y * w + x];
-    };
-
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
     auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
     auto clampByteF = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
-    // (x - lo) * invRange instead of (x - lo) / (hi - lo): integer/float
-    // division is meaningfully slower than multiplication on most CPUs,
-    // and lo/hi are the same two constants (4, 28) every call, so the
-    // reciprocal is easy to hoist out of the per-pixel loop.
     const float invRange = 1.0f / (28.0f - 4.0f);
     auto smoothstepf = [invRange](float lo, float x) -> float
     {
@@ -750,60 +739,97 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
         return t * t * (3.0f - 2.0f * t);
     };
 
+    // Shared per-pixel math (sharpen + saturate), given the pixel and
+    // its 4 already-fetched neighbours. Used by both the branch-free
+    // interior loop and the single-pixel border cases below, so the two
+    // paths are guaranteed to produce identical output - only how the
+    // neighbours are fetched differs.
+    auto processPixel = [&](u32 c, u32 n, u32 s, u32 wst, u32 e) -> u32
+    {
+        int cc[3], avgv[3];
+        int edgeMag = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            int shift = i * 8;
+            cc[i] = channel(c, shift);
+            avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) >> 2;
+            edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
+        }
+        float edgeFactor = smoothstepf(4.0f, (float)edgeMag);
+        float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
+
+        u32 sharpened = 0;
+        for (int i = 0; i < 3; i++)
+        {
+            int v = cc[i] + (int)((float)(cc[i] - avgv[i]) * effectiveStrength);
+            sharpened |= clampByte(v) << (i * 8);
+        }
+        sharpened |= c & 0xFF000000;
+
+        float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
+        float luma = 0.299f*r + 0.587f*g + 0.114f*b;
+        return clampByteF(luma + (r - luma) * satFactor)
+             | (clampByteF(luma + (g - luma) * satFactor) << 8)
+             | (clampByteF(luma + (b - luma) * satFactor) << 16)
+             | (sharpened & 0xFF000000);
+    };
+
     ParallelForRows(h, [&](u32 yStart, u32 yEnd)
     {
         for (u32 y = yStart; y < yEnd; y++)
         {
-            for (u32 x = 0; x < w; x++)
+            // Row pointers resolved ONCE per row (clamped at the top/
+            // bottom image edges here) instead of via a branchy at()
+            // call for every single pixel - the old version paid two
+            // bounds-check branches per neighbour fetch, 5 fetches per
+            // pixel, on every pixel of the whole upscaled image. That's
+            // the biggest chunk of why this pass was ~8x slower than
+            // the upscale step for the same pixel count: this is a
+            // genuinely heavier per-pixel algorithm (edge detection +
+            // adaptive strength + saturation, all in float), and it was
+            // also paying needless branch/bounds-check overhead on top
+            // of that on every single one of those pixels.
+            const u32* rowC = src + (size_t)y * w;
+            // NOTE on border neighbours: the original at(x,y) clamped
+            // via unsigned underflow for the *top/left* directions only
+            // - at(x-1,y) for x=0 computes x-1 as UINT32_MAX, which its
+            // own "if (x >= w) x = w-1" check then snaps to the *last*
+            // column rather than back to column 0; same for at(x,y-1)
+            // at row 0, which wraps to the last row. The *bottom/right*
+            // directions don't underflow (x+1 == w, y+1 == h are just
+            // plain positive values), so they hit that same clamp
+            // branch normally and land on themselves (last column/row),
+            // no wraparound. Replicating this exact (slightly odd,
+            // asymmetric) behaviour here so this rewrite's output
+            // matches the original pixel-for-pixel - this is a very
+            // minor visual quirk on the outermost border pixels, not
+            // something to silently "fix" as a side effect of a
+            // performance change.
+            const u32* rowN = src + (size_t)(y > 0 ? y - 1 : h - 1) * w;
+            const u32* rowS = src + (size_t)(y + 1 < h ? y + 1 : h - 1) * w;
+            u32* dstRow = dst + (size_t)y * w;
+
+            if (w >= 2)
             {
-                u32 c = at(x, y);
-                u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
+                // Left border pixel (x=0): west neighbour wraps to the
+                // last column (see NOTE above).
+                dstRow[0] = processPixel(rowC[0], rowN[0], rowS[0], rowC[w-1], rowC[1]);
 
-                // cc/avg computed once per channel here and reused below
-                // - the old version called channel()/averaged the same
-                // 4 neighbours twice per channel (once for edgeMag, once
-                // for the actual sharpen), doubling this pass's per-
-                // pixel arithmetic for no reason.
-                //
-                // ">> 2" instead of "/ 4": the sum of four 0-255 bytes
-                // is always non-negative, so an unsigned-style right
-                // shift gives the exact same result as the division -
-                // but a plain signed `int` division by a non-power-of-2-
-                // looking constant makes the compiler emit extra
-                // instructions to handle a negative dividend that can
-                // never actually occur here. The shift sidesteps that
-                // for free.
-                int cc[3], avgv[3];
-                int edgeMag = 0;
-                for (int i = 0; i < 3; i++)
+                // Interior: no bounds checks at all, direct indexing.
+                for (u32 x = 1; x + 1 < w; x++)
                 {
-                    int shift = i * 8;
-                    cc[i] = channel(c, shift);
-                    avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) >> 2;
-                    edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
+                    dstRow[x] = processPixel(rowC[x], rowN[x], rowS[x], rowC[x-1], rowC[x+1]);
                 }
-                float edgeFactor = smoothstepf(4.0f, (float)edgeMag);
-                float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
 
-                u32 sharpened = 0;
-                for (int i = 0; i < 3; i++)
-                {
-                    int v = cc[i] + (int)((float)(cc[i] - avgv[i]) * effectiveStrength);
-                    sharpened |= clampByte(v) << (i * 8);
-                }
-                sharpened |= c & 0xFF000000;
-
-                // Saturation boost, applied immediately to this pixel's
-                // freshly-sharpened value - equivalent to running
-                // ApplySaturationBoost as a separate pass over dst afterwards.
-                float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
-                float luma = 0.299f*r + 0.587f*g + 0.114f*b;
-                u32 out = clampByteF(luma + (r - luma) * satFactor)
-                        | (clampByteF(luma + (g - luma) * satFactor) << 8)
-                        | (clampByteF(luma + (b - luma) * satFactor) << 16)
-                        | (sharpened & 0xFF000000);
-
-                dst[y * w + x] = out;
+                // Right border pixel (x=w-1): east neighbour clamps to
+                // w-1 in the original (x+1 == w hits the same ">= w"
+                // branch normally, no underflow involved here).
+                u32 last = w - 1;
+                dstRow[last] = processPixel(rowC[last], rowN[last], rowS[last], rowC[last-1], rowC[last]);
+            }
+            else // w == 1: single column - x-1 underflows/wraps to itself (0), x+1 clamps to itself too
+            {
+                dstRow[0] = processPixel(rowC[0], rowN[0], rowS[0], rowC[0], rowC[0]);
             }
         }
     });
