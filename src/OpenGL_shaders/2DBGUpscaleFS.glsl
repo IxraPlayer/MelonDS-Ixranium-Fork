@@ -87,14 +87,14 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     int wc = local.x - qc * 2; // col within that quadrant (0 or 1)
     int dist = abs(wr - qr) + abs(wc - qc);
 
-    bool active;
+    bool isActive;
     vec4 neighbor;
-    if (qr == 0 && qc == 0)      { active = condTL; neighbor = D; }
-    else if (qr == 0 && qc == 1) { active = condTR; neighbor = F; }
-    else if (qr == 1 && qc == 0) { active = condBL; neighbor = D; }
-    else                          { active = condBR; neighbor = F; }
+    if (qr == 0 && qc == 0)      { isActive = condTL; neighbor = D; }
+    else if (qr == 0 && qc == 1) { isActive = condTR; neighbor = F; }
+    else if (qr == 1 && qc == 0) { isActive = condBL; neighbor = D; }
+    else                          { isActive = condBR; neighbor = F; }
 
-    return active ? mix(E, neighbor, TierWeight(dist)) : E;
+    return isActive ? mix(E, neighbor, TierWeight(dist)) : E;
 }
 
 // Looks up the upscaled colour at an arbitrary point in OUTPUT (4x)
