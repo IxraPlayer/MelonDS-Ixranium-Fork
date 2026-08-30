@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -71,6 +72,50 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
 // single constant to adjust; 0 falls back to the exact-match behaviour
 // this project started with.
 inline constexpr u32 kColorTolerance = 2;
+
+// Splits [0, rowCount) into chunks and runs `fn(rowStart, rowEnd)` for
+// each chunk on its own thread, then waits for all of them - used to
+// spread the row-independent upscale/sharpen work below across CPU
+// cores instead of running single-threaded. Every row of
+// EagleUpscale4x/TextureSharpenAndSaturate only reads its own
+// neighbouring *source* rows and writes its own *destination* row, so
+// splitting by row range is safe: no two threads ever write the same
+// output pixel, and reads never race a write. Falls back to running on
+// the calling thread directly when the work is small enough that
+// thread-launch overhead wouldn't pay off, or the machine only has one
+// hardware thread.
+template <typename Fn>
+inline void ParallelForRows(u32 rowCount, Fn&& fn)
+{
+    static const u32 hwThreads = std::max(1u, std::thread::hardware_concurrency());
+
+    // Not worth spinning up threads for a handful of rows (small
+    // sprites, icons) - the thread creation cost alone would outweigh
+    // the work being parallelised.
+    if (hwThreads <= 1 || rowCount < 32)
+    {
+        fn(0u, rowCount);
+        return;
+    }
+
+    u32 numThreads = std::min(hwThreads, rowCount);
+    u32 rowsPerThread = (rowCount + numThreads - 1) / numThreads;
+
+    std::vector<std::thread> threads;
+    threads.reserve(numThreads - 1);
+    for (u32 t = 1; t < numThreads; t++)
+    {
+        u32 start = t * rowsPerThread;
+        u32 end = std::min(start + rowsPerThread, rowCount);
+        if (start >= end) break;
+        threads.emplace_back([&fn, start, end]() { fn(start, end); });
+    }
+    // thread 0's slice runs on the calling thread instead of spawning
+    // one more - no reason to pay for an extra thread just to leave the
+    // caller idle while it runs.
+    fn(0u, std::min(rowsPerThread, rowCount));
+    for (auto& th : threads) th.join();
+}
 
 // Strength of the post-upscale sharpening pass (TextureSharpen), in the
 // same 0-1 range CAS used for the earlier (now-removed) screen-space
@@ -189,26 +234,29 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         }
     };
 
-    for (u32 y = 0; y < srcH; y++)
+    ParallelForRows(srcH, [&](u32 yStart, u32 yEnd)
     {
-        for (u32 x = 0; x < srcW; x++)
+        for (u32 y = yStart; y < yEnd; y++)
         {
-            u32 B = at(x, y-1);
-            u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
-            u32 H = at(x, y+1);
+            for (u32 x = 0; x < srcW; x++)
+            {
+                u32 B = at(x, y-1);
+                u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
+                u32 H = at(x, y+1);
 
-            bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F);
-            bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H);
-            bool condBL = Close(D,H) && !Close(D,B) && !Close(H,F);
-            bool condBR = Close(H,F) && !Close(H,D) && !Close(F,B);
+                bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F);
+                bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H);
+                bool condBL = Close(D,H) && !Close(D,B) && !Close(H,F);
+                bool condBR = Close(H,F) && !Close(H,D) && !Close(F,B);
 
-            u32* block = dst + (y*4) * dstW + (x*4);
-            fillQuadrant(block,                    condTL, D, E, 0, 0); // top-left quadrant, corner at its own (0,0)
-            fillQuadrant(block + 2,                 condTR, F, E, 0, 1); // top-right quadrant, corner at its own (0,1)
-            fillQuadrant(block + 2*dstW,             condBL, D, E, 1, 0); // bottom-left quadrant, corner at its own (1,0)
-            fillQuadrant(block + 2*dstW + 2,          condBR, F, E, 1, 1); // bottom-right quadrant, corner at its own (1,1)
+                u32* block = dst + (y*4) * dstW + (x*4);
+                fillQuadrant(block,                    condTL, D, E, 0, 0); // top-left quadrant, corner at its own (0,0)
+                fillQuadrant(block + 2,                 condTR, F, E, 0, 1); // top-right quadrant, corner at its own (0,1)
+                fillQuadrant(block + 2*dstW,             condBL, D, E, 1, 0); // bottom-left quadrant, corner at its own (1,0)
+                fillQuadrant(block + 2*dstW + 2,          condBR, F, E, 1, 1); // bottom-right quadrant, corner at its own (1,1)
+            }
         }
-    }
+    });
 }
 
 inline void EagleUpscale3x(const u32* src, u32 srcW, u32 srcH, u32* dst)
@@ -492,46 +540,49 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
         return t * t * (3.0f - 2.0f * t);
     };
 
-    for (u32 y = 0; y < h; y++)
+    ParallelForRows(h, [&](u32 yStart, u32 yEnd)
     {
-        for (u32 x = 0; x < w; x++)
+        for (u32 y = yStart; y < yEnd; y++)
         {
-            u32 c = at(x, y);
-            u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
-
-            int edgeMag = 0;
-            for (int shift = 0; shift < 24; shift += 8)
+            for (u32 x = 0; x < w; x++)
             {
-                int cc = channel(c, shift);
-                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                edgeMag = std::max(edgeMag, std::abs(cc - avg));
+                u32 c = at(x, y);
+                u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
+
+                int edgeMag = 0;
+                for (int shift = 0; shift < 24; shift += 8)
+                {
+                    int cc = channel(c, shift);
+                    int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                    edgeMag = std::max(edgeMag, std::abs(cc - avg));
+                }
+                float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
+                float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
+
+                u32 sharpened = 0;
+                for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha
+                {
+                    int cc = channel(c, shift);
+                    int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
+                    int v = cc + (int)((float)(cc - avg) * effectiveStrength);
+                    sharpened |= clampByte(v) << shift;
+                }
+                sharpened |= c & 0xFF000000;
+
+                // Saturation boost, applied immediately to this pixel's
+                // freshly-sharpened value - equivalent to running
+                // ApplySaturationBoost as a separate pass over dst afterwards.
+                float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
+                float luma = 0.299f*r + 0.587f*g + 0.114f*b;
+                u32 out = clampByteF(luma + (r - luma) * satFactor)
+                        | (clampByteF(luma + (g - luma) * satFactor) << 8)
+                        | (clampByteF(luma + (b - luma) * satFactor) << 16)
+                        | (sharpened & 0xFF000000);
+
+                dst[y * w + x] = out;
             }
-            float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
-            float effectiveStrength = sharpenStrength * (0.33f + edgeFactor * (1.5f - 0.33f));
-
-            u32 sharpened = 0;
-            for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha
-            {
-                int cc = channel(c, shift);
-                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                int v = cc + (int)((float)(cc - avg) * effectiveStrength);
-                sharpened |= clampByte(v) << shift;
-            }
-            sharpened |= c & 0xFF000000;
-
-            // Saturation boost, applied immediately to this pixel's
-            // freshly-sharpened value - equivalent to running
-            // ApplySaturationBoost as a separate pass over dst afterwards.
-            float r = (float)channel(sharpened, 0), g = (float)channel(sharpened, 8), b = (float)channel(sharpened, 16);
-            float luma = 0.299f*r + 0.587f*g + 0.114f*b;
-            u32 out = clampByteF(luma + (r - luma) * satFactor)
-                    | (clampByteF(luma + (g - luma) * satFactor) << 8)
-                    | (clampByteF(luma + (b - luma) * satFactor) << 16)
-                    | (sharpened & 0xFF000000);
-
-            dst[y * w + x] = out;
         }
-    }
+    });
 }
 
 
