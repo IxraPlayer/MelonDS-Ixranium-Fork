@@ -65,6 +65,19 @@ bool TexcacheOpenGLLoader::GPUUpscaleSharpenSaturate(GLuint destArray, u32 nativ
 
             glGenFramebuffers(1, &UpscaleFBO);
             glGenTextures(1, &UpscaleScratchTex);
+            // Every other draw pass in this codebase (GPU2D_OpenGL.cpp,
+            // GPU3D_OpenGL.cpp, GPU_OpenGL.cpp, Screen.cpp) creates and
+            // binds its own VAO before drawing, even when it has no
+            // real per-vertex attributes to describe - core-profile
+            // OpenGL requires *some* VAO bound for glDrawArrays to be
+            // valid at all, even for a gl_VertexID-only vertex shader
+            // like this pass's. This was missing from the first version
+            // of this function - whether it happened to work depended
+            // entirely on some VAO being left bound by whatever ran
+            // before GetTexture() was called, which isn't something to
+            // rely on. Fixed: this pass now owns and binds its own
+            // (attribute-less) VAO, matching the rest of the codebase.
+            glGenVertexArrays(1, &UpscaleVAO);
         }
     }
 
@@ -74,12 +87,13 @@ bool TexcacheOpenGLLoader::GPUUpscaleSharpenSaturate(GLuint destArray, u32 nativ
     // Save the state this pass touches, so GetTexture's caller (the 3D
     // renderer, mid-scene-setup) sees everything back exactly as it was
     // once this call returns.
-    GLint prevFBO = 0, prevProgram = 0, prevActiveTex = 0, prevTexBinding = 0;
+    GLint prevFBO = 0, prevProgram = 0, prevActiveTex = 0, prevTexBinding = 0, prevVAO = 0;
     GLint prevViewport[4];
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
     glGetIntegerv(GL_CURRENT_PROGRAM, &prevProgram);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &prevActiveTex);
     glGetIntegerv(GL_VIEWPORT, prevViewport);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVAO);
     glActiveTexture(GL_TEXTURE0);
     glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTexBinding);
 
@@ -114,6 +128,7 @@ bool TexcacheOpenGLLoader::GPUUpscaleSharpenSaturate(GLuint destArray, u32 nativ
     glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, destArray, 0, (GLint)destLayer);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
     glViewport(0, 0, (GLsizei)(nativeW * 4), (GLsizei)(nativeH * 4));
+    glBindVertexArray(UpscaleVAO);
 
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
@@ -121,6 +136,7 @@ bool TexcacheOpenGLLoader::GPUUpscaleSharpenSaturate(GLuint destArray, u32 nativ
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)prevFBO);
     glUseProgram((GLuint)prevProgram);
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
+    glBindVertexArray((GLuint)prevVAO);
     glBindTexture(GL_TEXTURE_2D, (GLuint)prevTexBinding);
     glActiveTexture((GLenum)prevActiveTex);
 

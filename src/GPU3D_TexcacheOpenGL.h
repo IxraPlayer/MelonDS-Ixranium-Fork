@@ -52,6 +52,7 @@ private:
     GLint UpscaleShaderStrengthULoc = -1;
     GLint UpscaleShaderSatULoc = -1;
     GLuint UpscaleFBO = 0;
+    GLuint UpscaleVAO = 0;
     GLuint UpscaleScratchTex = 0;
     u32 UpscaleScratchW = 0, UpscaleScratchH = 0;
 };
