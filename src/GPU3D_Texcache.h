@@ -238,6 +238,7 @@ struct IxraniumProfiler
     std::atomic<u64> FrameTimeSamples{0};
 
     std::atomic<u64> FrameCount{0};
+    std::atomic<u64> LiveCacheEntries{0};
 
     static constexpr u64 kProfileIntervalFrames = 60;
 
@@ -266,8 +267,9 @@ struct IxraniumProfiler
     // timing is recorded every call regardless of upscaleOn; the
     // detailed texture-pipeline counters only matter (and only get
     // reset) when upscaling is actually on, same as before.
-    void OnFrame(bool upscaleOn)
+    void OnFrame(bool upscaleOn, u64 liveCacheEntries)
     {
+        LiveCacheEntries.store(liveCacheEntries, std::memory_order_relaxed);
         auto now = std::chrono::high_resolution_clock::now();
         if (HaveLastFrameAt)
         {
@@ -312,6 +314,8 @@ struct IxraniumProfiler
         n += snprintf(buf+n, sizeof(buf)-n, "--- whole-frame wall-clock (CPU emu + ALL rendering + present, not just this texture cache) ---\n");
         n += snprintf(buf+n, sizeof(buf)-n, "frame time avg/min/max ms: %.2f / %.2f / %.2f   (~%.1f FPS avg)\n",
             avgFrameMs, ms(fMin), ms(fMax), avgFps);
+        n += snprintf(buf+n, sizeof(buf)-n, "live cache entries (permanently GPU-resident textures): %llu / %llu cap\n",
+            (unsigned long long)LiveCacheEntries.load(), (unsigned long long)512);
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
@@ -998,8 +1002,9 @@ public:
 
     bool Update(u8& clrBitmapDirty)
     {
-        IxraniumProfiler::Get().OnFrame(IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed));
+        IxraniumProfiler::Get().OnFrame(IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed), Cache.size());
         UpscalesThisFrame = 0;
+        CurrentFrame++;
 
         auto textureDirty = GPU.VRAMDirty_Texture.DeriveState(GPU.VRAMMap_Texture, GPU);
         auto texPalDirty = GPU.VRAMDirty_TexPal.DeriveState(GPU.VRAMMap_TexPal, GPU);
@@ -1092,6 +1097,7 @@ public:
         if (it != Cache.end())
         {
             IxraniumProfiler::Get().CacheHits.fetch_add(1, std::memory_order_relaxed);
+            it->second.LastUsedFrame = CurrentFrame;
             textureHandle = it->second.Texture.TextureID;
             layer = it->second.Texture.Layer;
             helper = &it->second.LastVariant;
@@ -1107,6 +1113,7 @@ public:
         u32 addr = (texParam & 0xFFFF) * 8;
 
         TexCacheEntry entry = {0};
+        entry.LastUsedFrame = CurrentFrame;
 
         entry.TextureRAMStart[0] = addr;
         entry.WidthLog2 = widthLog2;
@@ -1386,6 +1393,27 @@ public:
 
         textureHandle = storagePlace.TextureID;
         layer = storagePlace.Layer;
+
+        // LRU eviction (see kMaxCacheEntries/LastUsedFrame's comments) -
+        // done right before inserting the new entry, so the cache never
+        // holds more than kMaxCacheEntries at once. A plain linear scan
+        // for the oldest entry rather than a real LRU list/heap: this
+        // only runs when the cache is already at its cap (a fairly high
+        // bar), so it's an occasional cleanup pass, not a per-texture
+        // cost - not worth the extra bookkeeping of a proper intrusive
+        // LRU structure for a cap in the hundreds of entries.
+        if (Cache.size() >= kMaxCacheEntries)
+        {
+            auto oldest = Cache.begin();
+            for (auto cit = Cache.begin(); cit != Cache.end(); ++cit)
+            {
+                if (cit->second.LastUsedFrame < oldest->second.LastUsedFrame)
+                    oldest = cit;
+            }
+            FreeTextures[oldest->second.WidthLog2][oldest->second.HeightLog2].push_back(oldest->second.Texture);
+            Cache.erase(oldest);
+        }
+
         helper = &Cache.emplace(std::make_pair(key, entry)).first->second.LastVariant;
     }
 
@@ -1425,8 +1453,41 @@ private:
 
         u64 TextureHash[2];
         u64 TexPalHash;
+
+        // Which frame this entry was last actually used to draw
+        // something (see CurrentFrame / kMaxCacheEntries below) - used
+        // to evict the least-recently-used entry once the cache holds
+        // too many. Without this, an entry only ever gets freed when
+        // the game overwrites its VRAM bytes - a texture the game
+        // loaded once and never touches again (very common for static
+        // sprites/portraits) sits resident forever. With Ixranium's 4x
+        // upscale multiplying every such texture's GPU memory footprint
+        // 16x, a scene with many one-off unique sprites (a character
+        // select screen, say) can accumulate enough permanently-held
+        // VRAM over a play session to start thrashing the driver -
+        // degrading ALL rendering, not just this texture cache, for the
+        // rest of the session, regardless of which screen you're on
+        // afterward. That matches exactly what was reported: a
+        // permanent slowdown that appeared once sprite-heavy content
+        // had been on screen, persisting on every screen after,
+        // present in both the CPU and GPU pipeline eras (it's a
+        // property of how many *distinct* textures get permanently
+        // cached, not of how their pixels get computed).
+        u64 LastUsedFrame = 0;
     };
     std::unordered_map<u64, TexCacheEntry> Cache;
+
+    // Cache-entry cap paired with LastUsedFrame above: once Cache holds
+    // more than this many entries, GetTexture evicts the least-
+    // recently-used one(s) back to FreeTextures before inserting a new
+    // one, so total resident (and therefore VRAM-held) texture count
+    // has a hard ceiling regardless of how many distinct textures a
+    // long play session ends up showing. Deliberately generous (most
+    // games won't get anywhere near this many simultaneously *useful*
+    // cached textures) - this is a safety net against unbounded growth,
+    // not a tight working-set size.
+    static constexpr size_t kMaxCacheEntries = 512;
+    u64 CurrentFrame = 0;
 
     // Content-hash -> already-upscaled pixel data (see the lookup in
     // GetTexture). Capped at kUpscaleResultCacheCap entries.
