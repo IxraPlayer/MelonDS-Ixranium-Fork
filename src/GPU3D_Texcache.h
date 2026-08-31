@@ -218,6 +218,25 @@ struct IxraniumProfiler
     std::atomic<u64> GLAllocNs{0};
     std::atomic<u64> GLUploadNs{0};
 
+    // Whole-frame wall-clock timing - the gap between successive
+    // Update() calls (Update() runs exactly once per emulated frame
+    // regardless of whether Ixranium upscaling is on), which covers
+    // EVERYTHING for that frame: CPU/ARM emulation, all of 2D/3D
+    // rendering (not just this texture cache), present/swap, vsync
+    // wait - not just the texture-cache costs the rest of this struct
+    // measures. Recorded unconditionally (even with upscaling off),
+    // because most of the profile windows so far showed 0 texture-cache
+    // misses yet FPS stayed low regardless - meaning whatever is
+    // actually capping FPS in those frames was never something this
+    // struct's other counters could see at all. This is the fix for
+    // that blind spot.
+    std::chrono::high_resolution_clock::time_point LastFrameAt{};
+    bool HaveLastFrameAt = false;
+    std::atomic<u64> FrameTimeSumNs{0};
+    std::atomic<u64> FrameTimeMaxNs{0};
+    std::atomic<u64> FrameTimeMinNs{UINT64_MAX};
+    std::atomic<u64> FrameTimeSamples{0};
+
     std::atomic<u64> FrameCount{0};
 
     static constexpr u64 kProfileIntervalFrames = 60;
@@ -243,9 +262,26 @@ struct IxraniumProfiler
 
     // Call once per frame (see Texcache::Update, which already runs
     // exactly once per frame to check VRAM invalidation). Dumps and
-    // resets the table every kProfileIntervalFrames frames.
+    // resets the table every kProfileIntervalFrames frames. Frame
+    // timing is recorded every call regardless of upscaleOn; the
+    // detailed texture-pipeline counters only matter (and only get
+    // reset) when upscaling is actually on, same as before.
     void OnFrame(bool upscaleOn)
     {
+        auto now = std::chrono::high_resolution_clock::now();
+        if (HaveLastFrameAt)
+        {
+            u64 deltaNs = (u64)std::chrono::duration_cast<std::chrono::nanoseconds>(now - LastFrameAt).count();
+            FrameTimeSumNs.fetch_add(deltaNs, std::memory_order_relaxed);
+            FrameTimeSamples.fetch_add(1, std::memory_order_relaxed);
+            u64 prevMax = FrameTimeMaxNs.load(std::memory_order_relaxed);
+            while (deltaNs > prevMax && !FrameTimeMaxNs.compare_exchange_weak(prevMax, deltaNs, std::memory_order_relaxed)) {}
+            u64 prevMin = FrameTimeMinNs.load(std::memory_order_relaxed);
+            while (deltaNs < prevMin && !FrameTimeMinNs.compare_exchange_weak(prevMin, deltaNs, std::memory_order_relaxed)) {}
+        }
+        LastFrameAt = now;
+        HaveLastFrameAt = true;
+
         if (!upscaleOn)
             return;
         if (FrameCount.fetch_add(1, std::memory_order_relaxed) + 1 < kProfileIntervalFrames)
@@ -262,10 +298,20 @@ struct IxraniumProfiler
         u64 chits = ContentCacheHits.load(), cmisses = ContentCacheMisses.load();
         u64 fullRuns = cmisses; // pipeline only actually runs on a content-cache miss
 
+        u64 fSamples = FrameTimeSamples.load();
+        u64 fSum = FrameTimeSumNs.load();
+        u64 fMax = FrameTimeMaxNs.load();
+        u64 fMin = fSamples ? FrameTimeMinNs.load() : 0;
+        double avgFrameMs = fSamples ? ms(fSum) / (double)fSamples : 0.0;
+        double avgFps = avgFrameMs > 0.0 ? 1000.0 / avgFrameMs : 0.0;
+
         char buf[2048];
         int n = 0;
         n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
         n += snprintf(buf+n, sizeof(buf)-n, "pool worker threads: %u (0 = fallback, single-threaded)\n", RowWorkerPool::Get().ThreadCount());
+        n += snprintf(buf+n, sizeof(buf)-n, "--- whole-frame wall-clock (CPU emu + ALL rendering + present, not just this texture cache) ---\n");
+        n += snprintf(buf+n, sizeof(buf)-n, "frame time avg/min/max ms: %.2f / %.2f / %.2f   (~%.1f FPS avg)\n",
+            avgFrameMs, ms(fMin), ms(fMax), avgFps);
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
@@ -291,6 +337,7 @@ struct IxraniumProfiler
         ContentCacheHits = 0; ContentCacheMisses = 0;
         NewGLArrayAllocs = 0; GLUploads = 0;
         DecodeNs = 0; UpscaleNs = 0; SharpenNs = 0; GLAllocNs = 0; GLUploadNs = 0;
+        FrameTimeSumNs = 0; FrameTimeMaxNs = 0; FrameTimeMinNs = UINT64_MAX; FrameTimeSamples = 0;
     }
 };
 
