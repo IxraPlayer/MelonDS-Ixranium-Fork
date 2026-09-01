@@ -2241,6 +2241,14 @@ void GLRenderer2D::DoRenderSprites(int line)
     // here, so the two must always be set together.
     bool ixraniumSprites = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed)
                         && melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed);
+    // SpriteUpTex may have just been written this same frame by
+    // PrerenderSprites()'s composite blit into SpriteUpFB (its color
+    // attachment). This is the actual texture that ends up on screen,
+    // so make sure that write is visible before sampling it here -
+    // same hazard as the other two spots, but this is the one that
+    // was still showing up as visible corruption.
+    if (ixraniumSprites)
+        glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
     glBindTexture(GL_TEXTURE_2D, ixraniumSprites ? SpriteUpTex : SpriteTex);
     glUniform1i(SpriteScaleULoc, ixraniumSprites ? 4 : 1);
 
