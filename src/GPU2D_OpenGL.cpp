@@ -1805,14 +1805,29 @@ void GLRenderer2D::PrerenderSprites()
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D_ARRAY, SpriteUpscaleCacheArray);
 
+            // Belt-and-suspenders alongside GetSpritePixel's read-side
+            // clamp: hard-clip each sprite's blit to exactly its own
+            // grid cell on the WRITE side too, via scissor. Without
+            // this, any rasterization/rounding edge case in the blit
+            // quad (e.g. a sprite whose Size isn't a clean multiple of
+            // the upscale factor) could still write a stray pixel into
+            // a neighbouring cell, which the read-side clamp alone
+            // can't undo since that neighbour would then have real
+            // (wrong) data sitting inside its own valid, clamped range.
+            glEnable(GL_SCISSOR_TEST);
+
             for (int i = 0; i < NumSprites; i++)
             {
                 if (layers[i] < 0) continue;
+                auto& s = SpriteConfig.uOAM[i];
+                glScissor((i & 0xF) * 256, (i >> 4) * 256, s.Size[0] * 4, s.Size[1] * 4);
                 glUniform1i(SpriteCacheBlitLayerULoc, layers[i]);
                 glUniform1i(SpriteCacheBlitSpriteIdxULoc, i);
                 glBindVertexArray(Parent.RectVtxArray);
                 glDrawArrays(GL_TRIANGLES, 0, 2*3);
             }
+
+            glDisable(GL_SCISSOR_TEST);
 
             glUseProgram(SpritePreShader);
             return; // done - old whole-atlas path skipped entirely
