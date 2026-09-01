@@ -17,6 +17,7 @@
 */
 
 #include <assert.h>
+#include <cstdio>
 #include "GPU_OpenGL.h"
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
@@ -1746,6 +1747,7 @@ void GLRenderer2D::PrerenderSprites()
 
         bool allCached = true;
         int layers[128];
+        int dbgType3 = 0, dbgMiss = 0, dbgNegAfterBuild = 0;
 
         for (int i = 0; i < NumSprites; i++)
         {
@@ -1766,12 +1768,36 @@ void GLRenderer2D::PrerenderSprites()
                 // original (uncached) path.
                 layers[i] = -1;
                 allCached = false;
+                dbgType3++;
                 continue;
             }
 
             int layer = GetOrBuildUpscaledSprite(i);
             layers[i] = layer;
-            if (layer < 0) allCached = false; // cache full / OOM this frame
+            if (layer < 0) { allCached = false; dbgNegAfterBuild++; } // cache full / OOM this frame
+        }
+
+        static int dbgFrameCounter = 0;
+        if ((dbgFrameCounter++ % 60) == 0)
+        {
+            int typeCount[9] = {0};
+            for (int i = 0; i < NumSprites; i++)
+            {
+                int t = SpriteConfig.uOAM[i].Type;
+                if (t >= 0 && t < 9) typeCount[t]++;
+            }
+            FILE* f = fopen("ixranium_sprite_debug.log", "a");
+            if (f)
+            {
+                fprintf(f, "[engine %d] NumSprites=%d types(0-8)=%d,%d,%d,%d,%d,%d,%d,%d,%d "
+                           "type>=3skipped=%d cacheFullOrOOM=%d allCached=%d path=%s\n",
+                        GPU2D.Num, NumSprites,
+                        typeCount[0], typeCount[1], typeCount[2], typeCount[3], typeCount[4],
+                        typeCount[5], typeCount[6], typeCount[7], typeCount[8],
+                        dbgType3, dbgNegAfterBuild, (int)allCached,
+                        allCached ? "FAST_BLIT" : "FALLBACK_ORIGINAL");
+                fclose(f);
+            }
         }
 
         if (allCached)
