@@ -37,6 +37,8 @@ using Platform::LogLevel;
 #include "OpenGL_shaders/2DCompositorFS.h"
 #include "OpenGL_shaders/2DBGUpscaleVS.h"
 #include "OpenGL_shaders/2DBGUpscaleFS.h"
+#include "OpenGL_shaders/2DSpriteCacheBlitVS.h"
+#include "OpenGL_shaders/2DSpriteCacheBlitFS.h"
 #include "GPU3D_Texcache.h" // melonDS::IxraniumTexUpscaleEnabled
 
 
@@ -94,6 +96,13 @@ bool GLRenderer2D::InitShaders()
                                               {{"oColor", 0}}))
         return false;
 
+    if (!OpenGL::CompileVertexFragmentProgram(SpriteCacheBlitShader,
+                                              k2DSpriteCacheBlitVS, k2DSpriteCacheBlitFS,
+                                              "2DSpriteCacheBlitShader",
+                                              {{"vPosition", 0}},
+                                              {{"oColor", 0}}))
+        return false;
+
     // set up uniforms
 
     glUseProgram(LayerPreShader);
@@ -143,6 +152,16 @@ bool GLRenderer2D::InitShaders()
     uniloc = glGetUniformLocation(BGUpscaleShader, "SrcTex");
     glUniform1i(uniloc, 0);
     BGUpscaleSrcSizeULoc = glGetUniformLocation(BGUpscaleShader, "uSrcSize");
+
+
+    glUseProgram(SpriteCacheBlitShader);
+
+    uniloc = glGetUniformLocation(SpriteCacheBlitShader, "uCacheArray");
+    glUniform1i(uniloc, 0);
+    uniloc = glGetUniformBlockIndex(SpriteCacheBlitShader, "ubSpriteConfig");
+    glUniformBlockBinding(SpriteCacheBlitShader, uniloc, 21);
+    SpriteCacheBlitLayerULoc = glGetUniformLocation(SpriteCacheBlitShader, "uLayer");
+    SpriteCacheBlitSpriteIdxULoc = glGetUniformLocation(SpriteCacheBlitShader, "uSpriteIdx");
 
 
     glUseProgram(CompositorShader);
@@ -206,12 +225,15 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
     SpriteShader = other.SpriteShader;
     CompositorShader = other.CompositorShader;
     BGUpscaleShader = other.BGUpscaleShader;
+    SpriteCacheBlitShader = other.SpriteCacheBlitShader;
 
     LayerPreCurBGULoc = other.LayerPreCurBGULoc;
     SpriteRenderTransULoc = other.SpriteRenderTransULoc;
     SpriteScaleULoc = other.SpriteScaleULoc;
     CompositorScaleULoc = other.CompositorScaleULoc;
     BGUpscaleSrcSizeULoc = other.BGUpscaleSrcSizeULoc;
+    SpriteCacheBlitLayerULoc = other.SpriteCacheBlitLayerULoc;
+    SpriteCacheBlitSpriteIdxULoc = other.SpriteCacheBlitSpriteIdxULoc;
 
     MosaicTex = other.MosaicTex;
 
@@ -369,6 +391,29 @@ bool GLRenderer2D::Init()
     glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, SpriteUpTex, 0);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
 
+    // Ixranium per-sprite upscale cache: a small scratch FB (single
+    // 64x64 native sprite) + a 256-layer 256x256 array holding each
+    // cached sprite's upscaled result (64*4=256 max native OBJ size).
+    glGenTextures(1, &SpriteScratchTex);
+    glBindTexture(GL_TEXTURE_2D, SpriteScratchTex);
+    glDefaultTexParams(GL_TEXTURE_2D);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &SpriteScratchFB);
+    glBindFramebuffer(GL_FRAMEBUFFER, SpriteScratchFB);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, SpriteScratchTex, 0);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+
+    glGenTextures(1, &SpriteUpscaleCacheArray);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, SpriteUpscaleCacheArray);
+    glDefaultTexParams(GL_TEXTURE_2D_ARRAY);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA, kSpriteCacheLayerDim, kSpriteCacheLayerDim,
+                 kSpriteCacheMaxLayers, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+    glGenFramebuffers(1, &SpriteUpscaleCacheFB);
+
+    SpriteCacheLayerFree.assign(kSpriteCacheMaxLayers, true);
+
     // generate texture to hold final (upscaled) sprites
 
     glGenTextures(1, &OBJLayerTex);
@@ -428,6 +473,7 @@ void GLRenderer2D::DeleteShaders()
     glDeleteProgram(SpriteShader);
     glDeleteProgram(CompositorShader);
     glDeleteProgram(BGUpscaleShader);
+    glDeleteProgram(SpriteCacheBlitShader);
 
     glDeleteTextures(1, &MosaicTex);
 }
@@ -457,6 +503,10 @@ GLRenderer2D::~GLRenderer2D()
     glDeleteFramebuffers(1, &SpriteFB);
     glDeleteTextures(1, &SpriteUpTex);
     glDeleteFramebuffers(1, &SpriteUpFB);
+    glDeleteTextures(1, &SpriteScratchTex);
+    glDeleteFramebuffers(1, &SpriteScratchFB);
+    glDeleteTextures(1, &SpriteUpscaleCacheArray);
+    glDeleteFramebuffers(1, &SpriteUpscaleCacheFB);
 
     glDeleteTextures(1, &OBJLayerTex);
     glDeleteTextures(1, &OBJDepthTex);

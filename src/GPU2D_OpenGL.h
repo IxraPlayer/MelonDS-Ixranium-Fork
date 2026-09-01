@@ -118,6 +118,13 @@ private:
     GLuint BGUpscaleShader;
     GLint BGUpscaleSrcSizeULoc;
 
+    // Ixranium sprite cache blit pass (see PrerenderSprites' cache-hit
+    // path) - places each cached, already-upscaled sprite into the 4x
+    // atlas without re-running BGUpscaleShader over the whole thing.
+    GLuint SpriteCacheBlitShader;
+    GLint SpriteCacheBlitLayerULoc;
+    GLint SpriteCacheBlitSpriteIdxULoc;
+
     GLuint SpriteFB;
     GLuint SpriteTex;
 
@@ -224,6 +231,8 @@ private:
     };
     std::unordered_map<SpriteCacheKey, SpriteCacheEntry, SpriteCacheKeyHash> SpriteUpscaleCache;
     GLuint SpriteUpscaleCacheArray = 0; // GL_TEXTURE_2D_ARRAY, one 4x-upscaled sprite per layer
+    GLuint SpriteUpscaleCacheFB = 0;
+    GLuint SpriteScratchTex = 0, SpriteScratchFB = 0;
     std::vector<bool> SpriteCacheLayerFree;
     u64 SpriteCacheFrameCounter = 0;
     static constexpr int kSpriteCacheMaxLayers = 256; // native max sprite is 64x64 -> 256x256 upscaled
