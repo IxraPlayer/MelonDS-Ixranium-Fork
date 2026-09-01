@@ -64,6 +64,15 @@ inline std::atomic<bool> IxraniumTexUpscaleEnabled{false};
 // GPU2D_OpenGL.cpp's PrerenderSprites()/DoRenderSprites().
 inline std::atomic<bool> IxraniumSpritesEnabled{true};
 
+// Sprite atlas debug dump (see AtlasSettingsDialog / HK_DumpSpriteAtlas):
+// set DumpSpriteAtlasRequested to trigger a one-shot readback of the
+// current SpriteUpTex atlas on the render thread (the only thread that
+// legally owns the GL context), which then calls AtlasDumpCallback with
+// the raw RGBA pixels so the Qt frontend can save it as PNG without the
+// core linking against Qt. Cleared back to false once handled.
+inline std::atomic<bool> DumpSpriteAtlasRequested{false};
+inline std::function<void(const u8* rgba, int width, int height, int engineNum)> AtlasDumpCallback = nullptr;
+
 // Small-tolerance colour comparison used by the upscale equality tests
 // below instead of a strict ==. Compares each of the four packed 8-bit
 // channels independently and allows them to differ by up to

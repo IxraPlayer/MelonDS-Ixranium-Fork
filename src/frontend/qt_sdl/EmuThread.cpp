@@ -160,6 +160,7 @@ void EmuThread::run()
 
         if (emuInstance->hotkeyPressed(HK_FrameLimitToggle)) emit windowLimitFPSChange();
         if (emuInstance->hotkeyPressed(HK_ToggleDebugOverlay)) emuInstance->toggleDebugOverlay();
+        if (emuInstance->hotkeyPressed(HK_DumpSpriteAtlas)) melonDS::DumpSpriteAtlasRequested.store(true, std::memory_order_relaxed);
 
         if (emuInstance->hotkeyPressed(HK_Pause)) emuTogglePause();
         if (emuInstance->hotkeyPressed(HK_Reset)) emuReset();

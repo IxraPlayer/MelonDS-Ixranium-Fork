@@ -57,6 +57,7 @@ enum
     HK_GuitarGripYellow,
     HK_GuitarGripBlue,
     HK_ToggleDebugOverlay,
+    HK_DumpSpriteAtlas,
     HK_MAX
 };
 

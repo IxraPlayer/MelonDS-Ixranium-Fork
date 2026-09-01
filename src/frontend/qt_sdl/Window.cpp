@@ -116,6 +116,7 @@
 #include "FirmwareSettingsDialog.h"
 #include "PathSettingsDialog.h"
 #include "DebugSettingsDialog.h"
+#include "AtlasSettingsDialog.h"
 #include "MPSettingsDialog.h"
 #include "WifiSettingsDialog.h"
 #include "InterfaceSettingsDialog.h"
@@ -2774,6 +2775,7 @@ void MainWindow::onOpenSettingsHub()
     settingsHub->addCategory(tr("Interface settings"));
     settingsHub->addCategory(tr("Path settings"));
     settingsHub->addCategory(tr("Debug settings"));
+    settingsHub->addCategory(tr("Atlas"));
 
     connect(settingsHub, &SettingsHubDialog::categorySelected, this, &MainWindow::onSettingsHubCategory);
 
@@ -2804,6 +2806,7 @@ void MainWindow::onSettingsHubCategory(int index)
         case 8: settingsHub->setPage(new InterfaceSettingsDialog(this)); break;
         case 9: settingsHub->setPage(new PathSettingsDialog(this)); break;
         case 10: settingsHub->setPage(new DebugSettingsDialog(this)); break;
+        case 11: settingsHub->setPage(new AtlasSettingsDialog(this)); break;
     }
 }
 

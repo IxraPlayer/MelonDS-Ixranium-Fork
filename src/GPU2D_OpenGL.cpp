@@ -18,6 +18,7 @@
 
 #include <assert.h>
 #include <cstdio>
+#include <vector>
 #include "GPU_OpenGL.h"
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
@@ -2254,6 +2255,43 @@ void GLRenderer2D::DoRenderSprites(int line)
     // was still showing up as visible corruption.
     if (ixraniumSprites)
         glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
+    // Debug: dump the exact atlas this engine is about to sample from,
+    // right after it's finished being written and barriered - this is
+    // the ground truth for "is the corruption already in the atlas, or
+    // introduced later while sampling it". Must run here (render
+    // thread, valid GL context) rather than from wherever the hotkey
+    // was pressed. Dumps whichever texture is actually in use
+    // (upscaled atlas if Ixranium sprites are on, native one if not),
+    // one file per engine since both call this each frame.
+    if (melonDS::DumpSpriteAtlasRequested.load(std::memory_order_relaxed) &&
+        melonDS::AtlasDumpCallback)
+    {
+        GLuint dumpTex = ixraniumSprites ? SpriteUpTex : SpriteTex;
+        int dw = ixraniumSprites ? (1024*4) : 1024;
+        int dh = ixraniumSprites ? (512*4) : 512;
+
+        GLuint dumpFB;
+        glGenFramebuffers(1, &dumpFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, dumpFB);
+        glFramebufferTexture(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, dumpTex, 0);
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+        std::vector<u8> pixels((size_t)dw * dh * 4);
+        glReadPixels(0, 0, dw, dh, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &dumpFB);
+
+        melonDS::AtlasDumpCallback(pixels.data(), dw, dh, GPU2D.Num);
+        // Only clear after BOTH engines have had a chance to dump this
+        // request - engine 0 runs first each frame, so only engine 1
+        // (the second call) actually clears it, otherwise engine 1
+        // would silently never get its turn on a single button press.
+        if (GPU2D.Num != 0)
+            melonDS::DumpSpriteAtlasRequested.store(false, std::memory_order_relaxed);
+    }
+
     glBindTexture(GL_TEXTURE_2D, ixraniumSprites ? SpriteUpTex : SpriteTex);
     glUniform1i(SpriteScaleULoc, ixraniumSprites ? 4 : 1);
 

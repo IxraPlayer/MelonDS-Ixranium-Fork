@@ -185,6 +185,7 @@ LegacyEntry LegacyFile[] =
     {"HKKey_GuitarGripYellow",    0, "Keyboard.HK_GuitarGripYellow", true},
     {"HKKey_GuitarGripBlue",      0, "Keyboard.HK_GuitarGripBlue", true},
     {"HKKey_ToggleDebugOverlay",  0, "Keyboard.HK_ToggleDebugOverlay", true},
+    {"HKKey_DumpSpriteAtlas",     0, "Keyboard.HK_DumpSpriteAtlas", true},
 
     {"HKJoy_Lid",                 0, "Joystick.HK_Lid", true},
     {"HKJoy_Mic",                 0, "Joystick.HK_Mic", true},
@@ -206,6 +207,7 @@ LegacyEntry LegacyFile[] =
     {"HKJoy_GuitarGripYellow",    0, "Joystick.HK_GuitarGripYellow", true},
     {"HKJoy_GuitarGripBlue",      0, "Joystick.HK_GuitarGripBlue", true},
     {"HKJoy_ToggleDebugOverlay",  0, "Joystick.HK_ToggleDebugOverlay", true},
+    {"HKJoy_DumpSpriteAtlas",     0, "Joystick.HK_DumpSpriteAtlas", true},
 
     {"JoystickID", 0, "JoystickID", true},
 

@@ -36,6 +36,9 @@
 #include <QVector>
 #include <QCommandLineParser>
 #include <QStandardPaths>
+#include <QImage>
+#include <QDir>
+#include <QDateTime>
 #include <QTranslator>
 #include <QLocale>
 #include "PopupCornerFix.h"
@@ -64,6 +67,7 @@
 #include "Config.h"
 
 #include "EmuInstance.h"
+#include "GPU3D_Texcache.h" // melonDS::AtlasDumpCallback
 #include "ArchiveUtil.h"
 #include "CameraManager.h"
 #include "MPInterface.h"
@@ -370,6 +374,28 @@ int main(int argc, char** argv)
         printf("did you just call me a derp???\n");
 
     MelonApplication melon(argc, argv);
+
+    // Atlas dump (Settings > Atlas / HK_DumpSpriteAtlas): the core can't
+    // link Qt, so it just hands back a raw RGBA buffer via this callback
+    // and we do the actual PNG save here. One file per engine (0/1),
+    // dropped next to screenshots so it's easy to find and attach.
+    melonDS::AtlasDumpCallback = [](const u8* rgba, int w, int h, int engineNum)
+    {
+        QImage img((const uchar*)rgba, w, h, w * 4, QImage::Format_RGBA8888);
+        img = img.mirrored(false, true); // GL reads bottom-up; flip for a normal top-down PNG
+
+        // Path is configurable from Settings > Atlas (AtlasDumpPath in the
+        // global config, set via that dialog's Browse button) - fall back
+        // to Pictures if the user never set one.
+        QString dir = Config::GetGlobalTable().GetQString("AtlasDumpPath");
+        if (dir.isEmpty())
+            dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        QDir().mkpath(dir);
+        QString path = QString("%1/melonDS_atlas_engine%2_%3.png")
+            .arg(dir).arg(engineNum)
+            .arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+        img.save(path, "PNG");
+    };
 
     // pathInit() resolves the config directory, and Config::Load() has to
     // run before anything reads a saved setting -- both used to happen
