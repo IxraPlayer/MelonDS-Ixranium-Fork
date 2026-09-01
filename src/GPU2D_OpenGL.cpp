@@ -1801,6 +1801,18 @@ void GLRenderer2D::PrerenderSprites()
 
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpFB);
             glViewport(0, 0, 1024*4, 512*4);
+
+            // Clear stale cells before blitting: cells not covered by an
+            // active sprite THIS frame (i >= NumSprites, or a slot whose
+            // previous occupant left different-sized content) otherwise
+            // keep whatever was drawn there in an earlier frame forever,
+            // since the loop below only touches cells it scissors into.
+            // That leftover buildup is exactly what showed up as ghost/
+            // duplicated sprite fragments in the atlas dump.
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(0, 0, 0, 0);
+            glClear(GL_COLOR_BUFFER_BIT);
+
             glUseProgram(SpriteCacheBlitShader);
             glBindBufferBase(GL_UNIFORM_BUFFER, 21, SpriteConfigUBO);
             glActiveTexture(GL_TEXTURE0);
@@ -1872,6 +1884,12 @@ void GLRenderer2D::PrerenderSprites()
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteFB);
     glViewport(0, 0, 1024, 512);
+
+    // Same stale-cell issue as SpriteUpFB below: only active OAM slots
+    // get redrawn each frame, so clear first or unused regions keep
+    // previous frames' leftover pixels.
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
 
     glBindBuffer(GL_ARRAY_BUFFER, SpritePreVtxBuffer);
     glBufferSubData(GL_ARRAY_BUFFER, 0, vtxnum * 3 * sizeof(u16), SpritePreVtxData);
