@@ -1980,10 +1980,22 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
     u64 h = 1469598103934665603ull;
     for (int row = 0; row < tilesUsed; row++)
     {
-        u32 addr = tileOffset + (u32)row * rowBytes;
-        u32 region = (addr / kSpriteVRAMRegionSize) % std::max<u32>(regionCount, 1);
-        h ^= gen[region];
-        h *= 1099511628211ull;
+        // A tile-row can be wider than one VRAM region (e.g. a 64px-wide
+        // sprite's row is 256 bytes, and depending on tileOffset's
+        // alignment that can straddle two or more 512-byte regions).
+        // Sampling only the row's start address misses generation bumps
+        // in the rest of the row, so a real content change there would
+        // never be noticed and the cache would keep serving stale tile
+        // data - fold in EVERY region the row's bytes actually cover.
+        u32 rowStart = tileOffset + (u32)row * rowBytes;
+        u32 rowEnd = rowStart + rowBytes; // exclusive
+        u32 regionStart = rowStart / kSpriteVRAMRegionSize;
+        u32 regionEnd = (rowEnd + kSpriteVRAMRegionSize - 1) / kSpriteVRAMRegionSize; // exclusive
+        for (u32 region = regionStart; region < regionEnd; region++)
+        {
+            h ^= gen[region % std::max<u32>(regionCount, 1)];
+            h *= 1099511628211ull;
+        }
     }
 
     // Fold in only the palette epoch this sprite actually depends on -
