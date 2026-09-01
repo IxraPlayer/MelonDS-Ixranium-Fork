@@ -240,7 +240,38 @@ struct IxraniumProfiler
     std::atomic<u64> FrameCount{0};
     std::atomic<u64> LiveCacheEntries{0};
 
-    static constexpr u64 kProfileIntervalFrames = 60;
+    // Cumulative (never reset by Reset() - tracks the whole session)
+    // total bytes ever requested via GenerateTexture(), i.e. every
+    // array's uploadW*uploadH*4*layers at the moment it was allocated -
+    // NOT current live usage (arrays are never individually freed
+    // outside Reset(), see TexArrays'/FreeTextures' comments), this is
+    // "how much GPU memory has this process asked the driver to
+    // reserve for texture arrays, all-time". Added specifically to test
+    // whether a large one-off allocation (or accumulation of many) is
+    // what triggers the permanent post-transition slowdown, since the
+    // live-entry-count-based LRU cap didn't stop it (12-15 entries is
+    // nothing on its own - but each array's *layers* are pre-allocated
+    // up front, up to 64 at once, regardless of how many are actually
+    // used yet, so a handful of new arrays can still mean tens of MB
+    // requested in one go).
+    std::atomic<u64> TotalArrayBytesEverAllocated{0};
+    // Same thing, but only this window's allocations (resets with the
+    // rest of the per-window counters) - lets you see exactly how much
+    // got requested in the window where the slowdown started.
+    std::atomic<u64> NewArrayBytesThisWindow{0};
+    // How many distinct (widthLog2, heightLog2) buckets have at least
+    // one array right now - each bucket's first array is a "cold" 8MB-
+    // or-less allocation; many distinct texture *sizes* showing up
+    // (rather than many textures of a few common sizes) multiplies how
+    // often that cold-allocation cost is paid.
+    std::atomic<u64> LiveBucketsInUse{0};
+    // Slow-frame counter: frames in this window whose wall-clock time
+    // exceeded 33ms (i.e. would have missed even a 30 FPS target) -
+    // avg/min/max can hide a lot; this says plainly how many frames out
+    // of the window were actually bad.
+    std::atomic<u64> SlowFrames{0};
+
+    static constexpr u64 kProfileIntervalFrames = 20;
 
     static IxraniumProfiler& Get() { static IxraniumProfiler p; return p; }
 
@@ -280,6 +311,8 @@ struct IxraniumProfiler
             while (deltaNs > prevMax && !FrameTimeMaxNs.compare_exchange_weak(prevMax, deltaNs, std::memory_order_relaxed)) {}
             u64 prevMin = FrameTimeMinNs.load(std::memory_order_relaxed);
             while (deltaNs < prevMin && !FrameTimeMinNs.compare_exchange_weak(prevMin, deltaNs, std::memory_order_relaxed)) {}
+            if (deltaNs > 33000000ULL) // 33ms - would miss even a 30 FPS target
+                SlowFrames.fetch_add(1, std::memory_order_relaxed);
         }
         LastFrameAt = now;
         HaveLastFrameAt = true;
@@ -314,8 +347,17 @@ struct IxraniumProfiler
         n += snprintf(buf+n, sizeof(buf)-n, "--- whole-frame wall-clock (CPU emu + ALL rendering + present, not just this texture cache) ---\n");
         n += snprintf(buf+n, sizeof(buf)-n, "frame time avg/min/max ms: %.2f / %.2f / %.2f   (~%.1f FPS avg)\n",
             avgFrameMs, ms(fMin), ms(fMax), avgFps);
+        n += snprintf(buf+n, sizeof(buf)-n, "slow frames (>33ms, i.e. <30fps) this window: %llu / %llu\n",
+            (unsigned long long)SlowFrames.load(), (unsigned long long)kProfileIntervalFrames);
         n += snprintf(buf+n, sizeof(buf)-n, "live cache entries (permanently GPU-resident textures): %llu / %llu cap\n",
             (unsigned long long)LiveCacheEntries.load(), (unsigned long long)512);
+        n += snprintf(buf+n, sizeof(buf)-n, "--- GPU texture-array memory (never individually freed until emu reset - see comments) ---\n");
+        n += snprintf(buf+n, sizeof(buf)-n, "live buckets in use (distinct texture sizes with an array): %llu\n",
+            (unsigned long long)LiveBucketsInUse.load());
+        n += snprintf(buf+n, sizeof(buf)-n, "array bytes requested this window: %.2f MB\n",
+            (double)NewArrayBytesThisWindow.load() / (1024.0*1024.0));
+        n += snprintf(buf+n, sizeof(buf)-n, "array bytes requested all-time (session total): %.2f MB\n",
+            (double)TotalArrayBytesEverAllocated.load() / (1024.0*1024.0));
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10s %12s\n", "metric", "count", "total ms");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache hits",          (unsigned long long)hits,    "-");
         n += snprintf(buf+n, sizeof(buf)-n, "%-26s %10llu %12s\n", "texcache misses",        (unsigned long long)misses,  "-");
@@ -342,6 +384,11 @@ struct IxraniumProfiler
         NewGLArrayAllocs = 0; GLUploads = 0;
         DecodeNs = 0; UpscaleNs = 0; SharpenNs = 0; GLAllocNs = 0; GLUploadNs = 0;
         FrameTimeSumNs = 0; FrameTimeMaxNs = 0; FrameTimeMinNs = UINT64_MAX; FrameTimeSamples = 0;
+        SlowFrames = 0;
+        NewArrayBytesThisWindow = 0;
+        // NOTE: TotalArrayBytesEverAllocated and LiveBucketsInUse are
+        // deliberately NOT reset here - they're cumulative/live-state
+        // counters for the whole session, not per-window ones.
     }
 };
 
@@ -1002,6 +1049,14 @@ public:
 
     bool Update(u8& clrBitmapDirty)
     {
+        {
+            u64 liveBuckets = 0;
+            for (u32 i = 0; i < 8; i++)
+                for (u32 j = 0; j < 8; j++)
+                    if (!TexArrays[i][j].empty())
+                        liveBuckets++;
+            IxraniumProfiler::Get().LiveBucketsInUse.store(liveBuckets, std::memory_order_relaxed);
+        }
         IxraniumProfiler::Get().OnFrame(IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed), Cache.size());
         UpscalesThisFrame = 0;
         CurrentFrame++;
@@ -1286,6 +1341,11 @@ public:
                 array = TexLoader.GenerateTexture(uploadW, uploadH, layers);
             }
             IxraniumProfiler::Get().NewGLArrayAllocs.fetch_add(1, std::memory_order_relaxed);
+            {
+                u64 bytes = (u64)uploadW * uploadH * 4 * layers;
+                IxraniumProfiler::Get().NewArrayBytesThisWindow.fetch_add(bytes, std::memory_order_relaxed);
+                IxraniumProfiler::Get().TotalArrayBytesEverAllocated.fetch_add(bytes, std::memory_order_relaxed);
+            }
 
             for (u32 i = 0; i < layers; i++)
             {
