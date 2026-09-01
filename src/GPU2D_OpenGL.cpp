@@ -2066,11 +2066,20 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
 {
     auto& s = SpriteConfig.uOAM[oamIndex];
 
+    // s.Rotscale == (u32)-1 means "not affine" - no matrix to fold in.
+    s32 rotPA = 0, rotPB = 0, rotPC = 0, rotPD = 0;
+    if (s.Rotscale != (u32)-1)
+    {
+        auto& rs = SpriteConfig.uRotscale[s.Rotscale];
+        rotPA = rs[0]; rotPB = rs[1]; rotPC = rs[2]; rotPD = rs[3];
+    }
+
     SpriteCacheKey key{
         s.TileOffset, s.TileStride, s.PalOffset,
         s.Size[0], s.Size[1], s.Flip[0], s.Flip[1],
         s.OBJMode, s.Mosaic, s.Type,
-        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, s.Type, s.PalOffset, GPU2D.Num != 0)
+        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, s.Type, s.PalOffset, GPU2D.Num != 0),
+        rotPA, rotPB, rotPC, rotPD
     };
 
     auto it = SpriteUpscaleCache.find(key);

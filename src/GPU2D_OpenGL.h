@@ -207,13 +207,25 @@ private:
         s32 SizeX, SizeY, FlipX, FlipY;
         u32 OBJMode, Mosaic, Type;
         u64 ContentHash; // hash of the referenced VRAM tile bytes
+        // Affine (RotScale) sprites are sampled with a per-pixel PA/PB/PC/PD
+        // matrix pulled from SpriteConfig.uRotscale[Rotscale] at scratch-render
+        // time, so the matrix's CURRENT values - not just which of the 32
+        // groups is assigned - are part of what pixels end up in the cached
+        // layer. A spinning/rotating sprite (attack VFX, portrait aura, the
+        // VS medal) keeps the same tile/pal/group index every frame while
+        // only the angle in that group changes, so without these four values
+        // in the key every rotated frame after the first HITS the cache and
+        // silently reuses a stale angle - rare, easy-to-miss corruption that
+        // only shows up on whichever screen actually uses RotScale sprites.
+        s32 RotPA = 0, RotPB = 0, RotPC = 0, RotPD = 0;
 
         bool operator==(const SpriteCacheKey& o) const
         {
             return TileOffset==o.TileOffset && TileStride==o.TileStride &&
                    PalOffset==o.PalOffset && SizeX==o.SizeX && SizeY==o.SizeY &&
                    FlipX==o.FlipX && FlipY==o.FlipY && OBJMode==o.OBJMode &&
-                   Mosaic==o.Mosaic && Type==o.Type && ContentHash==o.ContentHash;
+                   Mosaic==o.Mosaic && Type==o.Type && ContentHash==o.ContentHash &&
+                   RotPA==o.RotPA && RotPB==o.RotPB && RotPC==o.RotPC && RotPD==o.RotPD;
         }
     };
     struct SpriteCacheKeyHash
@@ -225,7 +237,8 @@ private:
             u64 h = 1469598103934665603ull;
             const u32 words[] = {k.TileOffset, k.TileStride, k.PalOffset,
                 (u32)k.SizeX, (u32)k.SizeY, (u32)k.FlipX, (u32)k.FlipY,
-                k.OBJMode, k.Mosaic, k.Type};
+                k.OBJMode, k.Mosaic, k.Type,
+                (u32)k.RotPA, (u32)k.RotPB, (u32)k.RotPC, (u32)k.RotPD};
             for (u32 w : words) { h ^= w; h *= 1099511628211ull; }
             h ^= k.ContentHash; h *= 1099511628211ull;
             return (size_t)h;
