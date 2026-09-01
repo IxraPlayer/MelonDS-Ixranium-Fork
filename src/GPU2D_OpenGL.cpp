@@ -2111,6 +2111,21 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
     // sized to the sprite (up to 64x64 native / 256x256 upscaled), not
     // the 1024x512 atlas, so cost scales with new content only.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteScratchFB);
+    // SpriteScratchTex is a single shared 64x64 texture reused by every
+    // miss. glViewport below only covers this sprite's own s.Size, so
+    // for anything smaller than 64x64 (nearly everything) the texels
+    // outside that rect still hold whatever the PREVIOUS miss (a
+    // different sprite, possibly a different size/flip/orientation)
+    // left there. The upscale pass's edge sampling can then pick up
+    // those stale neighbouring texels - showing up as another sprite's
+    // content bleeding in, misaligned/rotated-looking fragments, right
+    // where s.Size is smaller than 64 i.e. exactly on "wide/tall" atlas
+    // sprites. Clear the whole scratch texture before every miss so
+    // there's nothing stale left to bleed in from.
+    glDisable(GL_SCISSOR_TEST);
+    glViewport(0, 0, 64, 64);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
     glViewport(0, 0, s.Size[0], s.Size[1]);
     glUseProgram(SpriteScratchShader);
     // Re-bind unit0=VRAMTex_OBJ / unit1=PalTex_OBJ every call, not just
