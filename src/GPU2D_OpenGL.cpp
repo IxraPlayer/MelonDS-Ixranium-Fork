@@ -2071,6 +2071,18 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteScratchFB);
     glViewport(0, 0, s.Size[0], s.Size[1]);
     glUseProgram(SpriteScratchShader);
+    // Re-bind unit0=VRAMTex_OBJ / unit1=PalTex_OBJ every call, not just
+    // once before the miss loop starts. The PREVIOUS iteration's upscale
+    // pass (right below) leaves unit0 pointing at SpriteScratchTex, so on
+    // any frame with 2+ cache misses every miss after the first sampled
+    // the prior sprite's scratch texture as its own tile data instead of
+    // real VRAM - garbled/misplaced pixels. Screens whose sprites rarely
+    // change (few misses/frame) almost never hit this, which is why only
+    // one screen ever showed it.
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
     glBindBufferBase(GL_UNIFORM_BUFFER, 21, SpriteConfigUBO);
     // draw single-sprite quad indexed at oamIndex into scratch, same
     // vertex layout as the bulk path above, vtxnum=6, index=oamIndex
