@@ -200,6 +200,12 @@ private:
     // SetRenderer() is never called on toggle and every already-cached
     // texture stays at its old (pre-toggle) resolution forever.
     int lastIxraniumTexUpscale = -1;
+    // Same idea, for the separate "Ixranium Sprites" toggle - see its
+    // own comment in GPU3D_Texcache.h. Doesn't change any texture
+    // dimensions the way the master toggle does, so a full Reset() is
+    // more a "force a clean resync" than a strict correctness need, but
+    // it keeps this toggle's behaviour consistent with the master one.
+    int lastIxraniumSprites = -1;
 
     double perfCountsSec;
 

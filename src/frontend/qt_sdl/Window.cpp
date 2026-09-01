@@ -774,9 +774,20 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
             // effect, so it can't distort perceived 3D depth the way
             // the earlier screen-space "Optimized Graphics" attempt did
             // (see that feature's removal earlier in this project).
-            actIxraniumGraphics = hamburgerMenu->addAction(tr("Ixranium Graphics"));
+            //
+            // Split into two toggles: "Classic" is the master switch
+            // (3D textures + 2D BG layers), "Sprites" is an *additional*
+            // switch for the 2D OBJ/sprite atlas upscale specifically -
+            // see IxraniumSpritesEnabled's comment in GPU3D_Texcache.h
+            // for why that one in particular deserved its own on/off,
+            // separate from everything else this feature touches.
+            actIxraniumGraphics = hamburgerMenu->addAction(tr("Ixranium Graphics (Classic)"));
             actIxraniumGraphics->setCheckable(true);
             connect(actIxraniumGraphics, &QAction::triggered, this, &MainWindow::onChangeIxraniumGraphics);
+
+            actIxraniumSprites = hamburgerMenu->addAction(tr("Ixranium Sprites"));
+            actIxraniumSprites->setCheckable(true);
+            connect(actIxraniumSprites, &QAction::triggered, this, &MainWindow::onChangeIxraniumSprites);
 
             this->hamburgerMenu = hamburgerMenu;
         }
@@ -1051,6 +1062,15 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
         bool ixraniumGraphicsOn = globalCfg.GetBool("3D.IxraniumTexUpscale");
         actIxraniumGraphics->setChecked(ixraniumGraphicsOn);
         melonDS::IxraniumTexUpscaleEnabled = ixraniumGraphicsOn;
+
+        // Same restore-on-startup logic as the Classic toggle above -
+        // defaults to true so anyone already using Ixranium Graphics
+        // before this split existed keeps seeing sprites upscaled too,
+        // matching the original all-on behaviour, unless they
+        // explicitly turn it off.
+        bool ixraniumSpritesOn = globalCfg.GetBool("3D.IxraniumSpritesUpscale");
+        actIxraniumSprites->setChecked(ixraniumSpritesOn);
+        melonDS::IxraniumSpritesEnabled = ixraniumSpritesOn;
 
         actLimitFramerate->setChecked(emuInstance->doLimitFPS);
         actAudioSync->setChecked(emuInstance->doAudioSync);
@@ -3145,6 +3165,19 @@ void MainWindow::onChangeIxraniumGraphics(bool checked)
     // change) throws away and recreates the Texcache from empty, so
     // everything gets re-decoded fresh at the new setting - simpler and
     // safer than reaching in to selectively invalidate it.
+    onUpdateVideoSettings(true);
+}
+
+void MainWindow::onChangeIxraniumSprites(bool checked)
+{
+    globalCfg.SetBool("3D.IxraniumSpritesUpscale", checked);
+    melonDS::IxraniumSpritesEnabled = checked;
+
+    // See onChangeIxraniumGraphics' comment - same reasoning applies:
+    // force a clean reinit so the 2D sprite atlas pool (SpriteTex/
+    // SpriteUpTex in GPU2D_OpenGL.cpp) gets rebuilt from a known state
+    // rather than possibly holding stale upscaled/native data from
+    // before the flip.
     onUpdateVideoSettings(true);
 }
 

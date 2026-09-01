@@ -1681,7 +1681,8 @@ void GLRenderer2D::PrerenderSprites()
     // needed alongside it, unlike PrerenderLayer's loop, because the
     // caller always rebinds VRAMTex_OBJ/PalTex_OBJ itself right before
     // each PrerenderSprites() call (see UpdateAndRender).
-    if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed))
+    if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) &&
+        melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed))
     {
         glUseProgram(BGUpscaleShader);
         glUniform2i(BGUpscaleSrcSizeULoc, 1024, 512);
@@ -1788,7 +1789,8 @@ void GLRenderer2D::DoRenderSprites(int line)
     // 2DSpriteFS.glsl uses uSpriteScale (set right below) to scale its
     // texelFetch coordinates to match whichever atlas is actually bound
     // here, so the two must always be set together.
-    bool ixraniumSprites = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed);
+    bool ixraniumSprites = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed)
+                        && melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed);
     glBindTexture(GL_TEXTURE_2D, ixraniumSprites ? SpriteUpTex : SpriteTex);
     glUniform1i(SpriteScaleULoc, ixraniumSprites ? 4 : 1);
 

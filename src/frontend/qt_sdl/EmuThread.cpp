@@ -899,10 +899,12 @@ void EmuThread::updateRenderer()
     // the (now on/off) upscale path instead of staying stuck at whatever
     // resolution they were first cached at.
     int ixraniumNow = melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) ? 1 : 0;
-    if (ixraniumNow != lastIxraniumTexUpscale)
+    int ixraniumSpritesNow = melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed) ? 1 : 0;
+    if (ixraniumNow != lastIxraniumTexUpscale || ixraniumSpritesNow != lastIxraniumSprites)
     {
         nds->GetRenderer().Reset();
         lastIxraniumTexUpscale = ixraniumNow;
+        lastIxraniumSprites = ixraniumSpritesNow;
     }
 }
 

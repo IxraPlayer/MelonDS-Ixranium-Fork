@@ -48,6 +48,22 @@ namespace melonDS
 // which recreates the Texcache (and therefore this) from empty.
 inline std::atomic<bool> IxraniumTexUpscaleEnabled{false};
 
+// Separate switch for JUST the 2D OBJ/sprite atlas upscale pass in
+// GPU2D_OpenGL.cpp's PrerenderSprites() - added so "Ixranium Graphics
+// Classic" (BG layers + 3D textures upscaled, sprites left native) and
+// "Ixranium Sprites" (everything upscaled, the original all-on
+// behaviour) can be toggled and compared independently. This matters
+// because PrerenderSprites' upscale runs on the *whole* 1024x512 sprite
+// atlas every time SpriteDirty is set, which for a fighting game's
+// constantly-animating character sprites is close to every frame - a
+// fundamentally different (and much more expensive, in practice) cost
+// profile than the 3D texture cache's per-texture, per-actual-VRAM-
+// write caching in this file. Only has any effect when
+// IxraniumTexUpscaleEnabled is also on ("Sprites" is an addition on top
+// of "Classic", not an independent mode) - see the two call sites in
+// GPU2D_OpenGL.cpp's PrerenderSprites()/DoRenderSprites().
+inline std::atomic<bool> IxraniumSpritesEnabled{true};
+
 // Small-tolerance colour comparison used by the upscale equality tests
 // below instead of a strict ==. Compares each of the four packed 8-bit
 // channels independently and allows them to differ by up to
@@ -344,6 +360,9 @@ struct IxraniumProfiler
         int n = 0;
         n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
         n += snprintf(buf+n, sizeof(buf)-n, "pool worker threads: %u (0 = fallback, single-threaded)\n", RowWorkerPool::Get().ThreadCount());
+        n += snprintf(buf+n, sizeof(buf)-n, "mode: %s\n",
+            !IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) ? "OFF" :
+            (IxraniumSpritesEnabled.load(std::memory_order_relaxed) ? "SPRITES (Classic + 2D sprite atlas upscale)" : "CLASSIC (3D textures + 2D BG layers only, sprites native)"));
         n += snprintf(buf+n, sizeof(buf)-n, "--- whole-frame wall-clock (CPU emu + ALL rendering + present, not just this texture cache) ---\n");
         n += snprintf(buf+n, sizeof(buf)-n, "frame time avg/min/max ms: %.2f / %.2f / %.2f   (~%.1f FPS avg)\n",
             avgFrameMs, ms(fMin), ms(fMax), avgFps);
