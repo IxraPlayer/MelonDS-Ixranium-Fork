@@ -46,8 +46,21 @@ void main()
     // Cache layers are a fixed 256x256; a sprite smaller than 64x64
     // native (most of them) only occupies the bottom-left fraction of
     // its layer (see GetOrBuildUpscaledSprite's glViewport sized to
-    // the sprite's own upscaled dimensions) - rescale uv to that
-    // fraction instead of assuming it fills the whole layer.
-    vec2 usedFraction = vec2(uOAM[uSpriteIdx].Size) * 4.0 / 256.0;
-    oColor = texture(uCacheArray, vec3(uv * usedFraction, float(uLayer)));
+    // the sprite's own upscaled dimensions) - the rest is whatever
+    // was in that layer's texels before (uninitialized on first use,
+    // or a previous sprite's leftovers after eviction/reuse).
+    //
+    // texture() + CLAMP_TO_EDGE is NOT safe here: at uv exactly on the
+    // used/unused boundary, float rounding can round the NEAREST pick
+    // one texel past the last valid one, sampling that garbage texel -
+    // a thin (often 1px) corrupted edge, worst on sprites whose
+    // footprint changes often (rotoscale), since that's when this
+    // boundary case gets hit most. Same reasoning 2DSpriteFS.glsl
+    // already uses texelFetch for its atlas reads - do the same here:
+    // fetch by explicit integer texel, clamped to the region we
+    // actually wrote, so there's no boundary to round across.
+    ivec2 usedSize = uOAM[uSpriteIdx].Size * 4;
+    ivec2 texel = ivec2(uv * vec2(usedSize));
+    texel = clamp(texel, ivec2(0), usedSize - ivec2(1));
+    oColor = texelFetch(uCacheArray, ivec3(texel, uLayer), 0);
 }
