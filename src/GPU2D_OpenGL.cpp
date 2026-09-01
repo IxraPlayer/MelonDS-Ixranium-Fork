@@ -1750,7 +1750,24 @@ void GLRenderer2D::PrerenderSprites()
         for (int i = 0; i < NumSprites; i++)
         {
             auto& sprite = SpriteConfig.uOAM[i];
-            if (sprite.Type >= 3) { layers[i] = -1; continue; }
+            if (sprite.Type >= 3)
+            {
+                // Display-capture / other uncacheable sprite types
+                // aren't handled by this fast path at all. Previously
+                // this just skipped drawing them outright (layers[i]
+                // stayed -1 and the composite blit below silently
+                // omits anything with a negative layer) - any screen
+                // that leans on this sprite type (e.g. an alpha-blended
+                // full-art splash) would permanently lose that content
+                // while a screen using only Type 0/1/2 sprites looked
+                // fine, which is exactly the "one screen always broken"
+                // pattern. Force the whole-frame fallback instead so
+                // these sprites still get rendered, just via the
+                // original (uncached) path.
+                layers[i] = -1;
+                allCached = false;
+                continue;
+            }
 
             int layer = GetOrBuildUpscaledSprite(i);
             layers[i] = layer;
