@@ -22,6 +22,7 @@
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
 #include "GPU3D.h"
+#include "NDS.h" // needed for GPU.NDS.NumFrames (GPU.h only forward-declares NDS)
 
 namespace melonDS
 {
