@@ -55,7 +55,20 @@ vec4 GetSpritePixel(int sprite, vec2 coord)
     // sprites' atlas cells.
     ivec2 basecoord = ivec2((sprite & 0xF) * 64, (sprite >> 4) * 64) * uSpriteScale;
 
-    return texelFetch(SpriteTex, basecoord + ivec2(coord * float(uSpriteScale)), 0);
+    // "coord" is interpolated across the quad (or matrix-transformed
+    // for rotscale) as a continuous float. At the last row/column its
+    // value can land exactly on - or a hair past - sprsize due to
+    // interpolation/precision, which after *uSpriteScale rounds into
+    // the FIRST texel of the NEXT grid cell instead of the last texel
+    // of this one. For a sprite in the rightmost grid column that next
+    // cell is the start of the following row - visually identical to
+    // the atlas wrapping (bottom-right overflow reappearing top-left),
+    // and since that neighbour is a different sprite it can carry a
+    // different flip/orientation too. Clamp into this cell only.
+    ivec2 cellSize = uOAM[sprite].Size * uSpriteScale;
+    ivec2 texel = clamp(ivec2(coord * float(uSpriteScale)), ivec2(0), cellSize - ivec2(1));
+
+    return texelFetch(SpriteTex, basecoord + texel, 0);
 }
 
 void main()
