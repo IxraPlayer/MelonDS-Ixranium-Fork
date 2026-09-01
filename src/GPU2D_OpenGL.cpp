@@ -2102,6 +2102,12 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
     glBindVertexArray(SpritePreVtxArray);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
+    // Just rendered into SpriteScratchTex via SpriteScratchFB above; about
+    // to bind that same texture as a sampler for the upscale pass below.
+    // Same write-then-read-same-texture hazard as the composite blit, but
+    // per-miss instead of per-frame - matters even for a single cache miss.
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
     glUseProgram(BGUpscaleShader);
     glUniform2i(BGUpscaleSrcSizeULoc, s.Size[0], s.Size[1]);
     glActiveTexture(GL_TEXTURE0);
