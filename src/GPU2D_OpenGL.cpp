@@ -1829,8 +1829,8 @@ void GLRenderer2D::RefreshSpriteVRAMGenerations()
     if (SpriteVRAMGenerationB.empty())
         SpriteVRAMGenerationB.resize((128*1024)/kSpriteVRAMRegionSize, 0);
 
-    auto dirtyA = GPU2D.GPU.VRAMDirty_AOBJ.DeriveState(GPU2D.GPU.VRAMMap_AOBJ, GPU2D.GPU);
-    auto dirtyB = GPU2D.GPU.VRAMDirty_BOBJ.DeriveState(GPU2D.GPU.VRAMMap_BOBJ, GPU2D.GPU);
+    auto dirtyA = GPU.VRAMDirty_AOBJ.DeriveState(GPU.VRAMMap_AOBJ, GPU);
+    auto dirtyB = GPU.VRAMDirty_BOBJ.DeriveState(GPU.VRAMMap_BOBJ, GPU);
 
     for (size_t i = 0; i < SpriteVRAMGenerationA.size(); i++)
         if (dirtyA.Data[i / 64] & (1ull << (i % 64)))
