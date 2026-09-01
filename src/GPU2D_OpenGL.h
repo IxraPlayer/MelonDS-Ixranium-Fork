@@ -259,8 +259,8 @@ private:
     // region dirty. Cheap CPU-side proxy for "did this sprite's tile
     // data change" - no GPU readback needed, unlike hashing pixels.
     static constexpr u32 kSpriteVRAMRegionSize = 512; // matches VRAMDirtyGranularity in GPU.h
-    // NOTE: the actual storage lives on Parent (GLRenderer), shared between
-    // both engines' instances - see GPU_OpenGL.h and RefreshSpriteVRAMGenerations().
+    std::vector<u32> SpriteVRAMGenerationA; // sized 256*1024/512 regions (engine A OBJ)
+    std::vector<u32> SpriteVRAMGenerationB; // sized 128*1024/512 regions (engine B OBJ)
 
     // Bumped whenever this engine's OBJ palette (standard or extended)
     // changes, tracked at the granularity sprites actually key off of
@@ -274,6 +274,7 @@ private:
     u32 ObjPalStdEpoch[2] = {};      // whole-256 table, for Type 1 sprites w/ standard palette (PalOffset==0)
     u32 ObjExtPalEpoch[2][16] = {};  // per extended-palette slot, for Type 1 sprites w/ ext palette
     void RefreshSpriteVRAMGenerations(); // call once per PrerenderSprites(), before any cache lookups
+    void BumpSpriteVRAMGenerations(const u64* dirtyBits, std::vector<u32>& gen);
     u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, u32 palOffset, bool engineB) const;
     void UpdateObjPalStdEpoch(int engine);
 

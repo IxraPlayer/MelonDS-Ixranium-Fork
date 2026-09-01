@@ -22,7 +22,6 @@
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
 #include "GPU3D.h"
-#include "NDS.h" // needed for GPU.NDS.NumFrames (GPU.h only forward-declares NDS)
 
 namespace melonDS
 {
@@ -1904,40 +1903,32 @@ void GLRenderer2D::PrerenderSprites()
 
 void GLRenderer2D::RefreshSpriteVRAMGenerations()
 {
-    // One-time-per-frame cost: derive which OBJ VRAM regions changed
-    // since last frame (the emu core already tracks this bitfield for
-    // GPU3D_Texcache's own invalidation - see its Update() calling the
-    // sibling MakeVRAMFlat_TextureCoherent) and bump that region's
-    // generation counter. Cheap - a bitfield scan over a few hundred
-    // bits, not a pixel comparison - and happens once, not per-sprite.
-    auto& genA = Parent.SpriteVRAMGenerationA;
-    auto& genB = Parent.SpriteVRAMGenerationB;
-    if (genA.empty())
-        genA.resize((256*1024)/kSpriteVRAMRegionSize, 0);
-    if (genB.empty())
-        genB.resize((128*1024)/kSpriteVRAMRegionSize, 0);
+    // NOTE: the actual generation counters are now bumped directly inside
+    // DrawSprites() (see GPU2D_OpenGL.cpp), right where this engine's own
+    // GPU.VRAMDirty_AOBJ/BOBJ.DeriveState() diff is legitimately consumed
+    // to refresh VRAMTex_OBJ. That call is already correctly gated to this
+    // renderer's own engine (GPU2D.Num) and already runs before
+    // PrerenderSprites() each frame, so re-deriving the SAME consume-on-read
+    // trackers again here would just steal bits out from under DrawSprites()
+    // (or vice versa, depending on call order) - whichever of the two
+    // consumers loses the race sees an already-cleared/empty diff and
+    // either misses updating VRAMTex_OBJ's pixels or misses bumping the
+    // cache's generation counters for genuinely new content. That double
+    // consumption of the same one-shot dirty state was the actual cause of
+    // the "one screen's sprites are corrupted/fragmented" bug - just ensure
+    // the arrays exist here (DrawSprites() also self-sizes them, so this is
+    // effectively a fallback for the very first call of the session).
+    if (SpriteVRAMGenerationA.empty())
+        SpriteVRAMGenerationA.resize((256*1024)/kSpriteVRAMRegionSize, 0);
+    if (SpriteVRAMGenerationB.empty())
+        SpriteVRAMGenerationB.resize((128*1024)/kSpriteVRAMRegionSize, 0);
+}
 
-    // GPU.VRAMDirty_AOBJ/BOBJ.DeriveState() is consume-on-read: it clears the
-    // underlying per-bank dirty bits as a side effect. Both engines' 2D
-    // renderers call this function once per frame, so only let the FIRST
-    // caller each frame actually query it; the second caller (whichever
-    // engine renders second) reuses the counters the first caller already
-    // bumped above (both engines share genA/genB on Parent now), instead of
-    // seeing an already-cleared/empty diff and silently freezing its own
-    // sprite cache on stale content while the other engine stayed correct.
-    if (Parent.SpriteVRAMDirtyFrame == GPU.NDS.NumFrames)
-        return;
-    Parent.SpriteVRAMDirtyFrame = GPU.NDS.NumFrames;
-
-    auto dirtyA = GPU.VRAMDirty_AOBJ.DeriveState(GPU.VRAMMap_AOBJ, GPU);
-    auto dirtyB = GPU.VRAMDirty_BOBJ.DeriveState(GPU.VRAMMap_BOBJ, GPU);
-
-    for (size_t i = 0; i < genA.size(); i++)
-        if (dirtyA.Data[i / 64] & (1ull << (i % 64)))
-            genA[i]++;
-    for (size_t i = 0; i < genB.size(); i++)
-        if (dirtyB.Data[i / 64] & (1ull << (i % 64)))
-            genB[i]++;
+void GLRenderer2D::BumpSpriteVRAMGenerations(const u64* dirtyBits, std::vector<u32>& gen)
+{
+    for (size_t i = 0; i < gen.size(); i++)
+        if (dirtyBits[i / 64] & (1ull << (i % 64)))
+            gen[i]++;
 }
 
 void GLRenderer2D::UpdateObjPalStdEpoch(int engine)
@@ -1981,7 +1972,7 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
     // reading a pixel - two frames where the tile data DID change
     // (new animation frame, VRAM bank swap) get a different value
     // because at least one covered region's generation moved on.
-    const auto& gen = engineB ? Parent.SpriteVRAMGenerationB : Parent.SpriteVRAMGenerationA;
+    const auto& gen = engineB ? SpriteVRAMGenerationB : SpriteVRAMGenerationA;
     const u32 regionCount = (u32)gen.size();
     const int tilesUsed = std::max(1, (sizeY + 7) / 8); // rows of tiles this sprite spans
     const u32 rowBytes = std::max<u32>(tileStride, 1);
@@ -2440,14 +2431,20 @@ void GLRenderer2D::DrawSprites(u32 line)
     {
         if (GPU2D.Num == 0)
         {
+            if (SpriteVRAMGenerationA.empty())
+                SpriteVRAMGenerationA.resize((256*1024)/kSpriteVRAMRegionSize, 0);
             objDirty = GPU.VRAMDirty_AOBJ.DeriveState(GPU.VRAMMap_AOBJ, GPU);
             GPU.MakeVRAMFlat_AOBJCoherent(objDirty);
+            BumpSpriteVRAMGenerations(objDirty.Data, SpriteVRAMGenerationA);
         }
         else
         {
+            if (SpriteVRAMGenerationB.empty())
+                SpriteVRAMGenerationB.resize((128*1024)/kSpriteVRAMRegionSize, 0);
             auto _objDirty = GPU.VRAMDirty_BOBJ.DeriveState(GPU.VRAMMap_BOBJ, GPU);
             GPU.MakeVRAMFlat_BOBJCoherent(_objDirty);
             memcpy(objDirty.Data, _objDirty.Data, 256>>3);
+            BumpSpriteVRAMGenerations(_objDirty.Data, SpriteVRAMGenerationB);
         }
     }
 
