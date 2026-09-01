@@ -925,6 +925,7 @@ void GLRenderer2D::UpdateAndRender(int line)
         if (GPU2D.Num == 0) SpritePalEpochA++;
         else SpritePalEpochB++;
     }
+    GPU.PaletteDirty &= ~objpalmask;
 
     if (SpriteDirty)
     {
