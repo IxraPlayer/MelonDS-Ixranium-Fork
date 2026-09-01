@@ -7,6 +7,7 @@ set(OPENGL_SHADER_FILES
     2DSpritePreFS.glsl
     2DSpriteCacheBlitVS.glsl
     2DSpriteCacheBlitFS.glsl
+    2DSpriteScratchVS.glsl
     2DSpriteVS.glsl
     2DSpriteFS.glsl
     2DCompositorVS.glsl

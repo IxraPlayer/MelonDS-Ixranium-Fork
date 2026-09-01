@@ -125,6 +125,13 @@ private:
     GLint SpriteCacheBlitLayerULoc;
     GLint SpriteCacheBlitSpriteIdxULoc;
 
+    // Renders ONE sprite in isolation into SpriteScratchFB (see
+    // GetOrBuildUpscaledSprite) - deliberately separate from
+    // SpritePreShader, which hardcodes the shared 1024x512 atlas's
+    // grid position/size and would misplace/clip a sprite rendered
+    // into a small scratch buffer instead.
+    GLuint SpriteScratchShader;
+
     GLuint SpriteFB;
     GLuint SpriteTex;
 

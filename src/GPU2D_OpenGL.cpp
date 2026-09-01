@@ -39,6 +39,7 @@ using Platform::LogLevel;
 #include "OpenGL_shaders/2DBGUpscaleFS.h"
 #include "OpenGL_shaders/2DSpriteCacheBlitVS.h"
 #include "OpenGL_shaders/2DSpriteCacheBlitFS.h"
+#include "OpenGL_shaders/2DSpriteScratchVS.h"
 #include "GPU3D_Texcache.h" // melonDS::IxraniumTexUpscaleEnabled
 
 
@@ -103,6 +104,13 @@ bool GLRenderer2D::InitShaders()
                                               {{"oColor", 0}}))
         return false;
 
+    if (!OpenGL::CompileVertexFragmentProgram(SpriteScratchShader,
+                                              k2DSpriteScratchVS, k2DSpritePreFS,
+                                              "2DSpriteScratchShader",
+                                              {{"vPosition", 0}, {"vSpriteIndex", 1}},
+                                              {{"oColor", 0}}))
+        return false;
+
     // set up uniforms
 
     glUseProgram(LayerPreShader);
@@ -162,6 +170,16 @@ bool GLRenderer2D::InitShaders()
     glUniformBlockBinding(SpriteCacheBlitShader, uniloc, 21);
     SpriteCacheBlitLayerULoc = glGetUniformLocation(SpriteCacheBlitShader, "uLayer");
     SpriteCacheBlitSpriteIdxULoc = glGetUniformLocation(SpriteCacheBlitShader, "uSpriteIdx");
+
+
+    glUseProgram(SpriteScratchShader);
+
+    uniloc = glGetUniformLocation(SpriteScratchShader, "VRAMTex");
+    glUniform1i(uniloc, 0);
+    uniloc = glGetUniformLocation(SpriteScratchShader, "PalTex");
+    glUniform1i(uniloc, 1);
+    uniloc = glGetUniformBlockIndex(SpriteScratchShader, "ubSpriteConfig");
+    glUniformBlockBinding(SpriteScratchShader, uniloc, 21);
 
 
     glUseProgram(CompositorShader);
@@ -226,6 +244,7 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
     CompositorShader = other.CompositorShader;
     BGUpscaleShader = other.BGUpscaleShader;
     SpriteCacheBlitShader = other.SpriteCacheBlitShader;
+    SpriteScratchShader = other.SpriteScratchShader;
 
     LayerPreCurBGULoc = other.LayerPreCurBGULoc;
     SpriteRenderTransULoc = other.SpriteRenderTransULoc;
@@ -474,6 +493,7 @@ void GLRenderer2D::DeleteShaders()
     glDeleteProgram(CompositorShader);
     glDeleteProgram(BGUpscaleShader);
     glDeleteProgram(SpriteCacheBlitShader);
+    glDeleteProgram(SpriteScratchShader);
 
     glDeleteTextures(1, &MosaicTex);
 }
@@ -1907,7 +1927,7 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
     // the 1024x512 atlas, so cost scales with new content only.
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteScratchFB);
     glViewport(0, 0, s.Size[0], s.Size[1]);
-    glUseProgram(SpritePreShader);
+    glUseProgram(SpriteScratchShader);
     glBindBufferBase(GL_UNIFORM_BUFFER, 21, SpriteConfigUBO);
     // draw single-sprite quad indexed at oamIndex into scratch, same
     // vertex layout as the bulk path above, vtxnum=6, index=oamIndex
