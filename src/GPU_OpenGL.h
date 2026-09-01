@@ -68,6 +68,26 @@ private:
     GLuint RectVtxBuffer;
     GLuint RectVtxArray;
 
+    // Ixranium sprite cache: GPU.VRAMDirty_AOBJ/BOBJ are shared, consume-on-read
+    // trackers (DeriveState() clears the underlying dirty bits for every VRAM
+    // bank it touches). Both per-engine GLRenderer2D instances call
+    // RefreshSpriteVRAMGenerations() once per frame, so whichever engine's
+    // renderer runs second would previously see an already-cleared/empty
+    // diff and fail to bump its generation counters, causing that engine's
+    // sprite cache to keep serving stale content (the "other screen" bug).
+    // Guard the actual DeriveState() call so it only fires once per real
+    // frame; the second caller reuses the first caller's result.
+    u64 SpriteVRAMDirtyFrame = ~0ull;
+    // Shared between both engines' GLRenderer2D instances (see
+    // RefreshSpriteVRAMGenerations() in GPU2D_OpenGL.cpp): the underlying
+    // VRAM dirty state is global emu-core state, consumed once per frame,
+    // so the derived per-region generation counters must live in one place
+    // both engines read from - keeping a separate copy per engine instance
+    // meant only whichever engine queried first each frame ever got its
+    // copy updated.
+    std::vector<u32> SpriteVRAMGenerationA; // 256*1024/512 regions (engine A OBJ)
+    std::vector<u32> SpriteVRAMGenerationB; // 128*1024/512 regions (engine B OBJ)
+
     GLuint OutputTex3D;
     GLuint OutputTex2D[2];
 
