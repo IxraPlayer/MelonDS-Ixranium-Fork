@@ -1812,6 +1812,15 @@ void GLRenderer2D::PrerenderSprites()
             glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
             glDepthMask(GL_FALSE);
 
+            // Any cache misses this frame just wrote fresh layers into
+            // SpriteUpscaleCacheArray via FBO attachment (GetOrBuildUpscaledSprite,
+            // above). We're about to bind that same array as a sampler for the
+            // blit loop below. Without a barrier, the just-written layers aren't
+            // guaranteed visible to the texture fetch yet on every driver -
+            // shows up as a one-frame glitch on whatever sprite was newly cached
+            // (rotozoom sprites are hit hardest since they're built often).
+            glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpFB);
             glViewport(0, 0, 1024*4, 512*4);
             glUseProgram(SpriteCacheBlitShader);
