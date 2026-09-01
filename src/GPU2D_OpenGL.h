@@ -263,14 +263,19 @@ private:
     std::vector<u32> SpriteVRAMGenerationB; // sized 128*1024/512 regions (engine B OBJ)
 
     // Bumped whenever this engine's OBJ palette (standard or extended)
-    // changes, so ContentHash also reflects palette recolors (e.g. hit
-    // flash / palette-cycling effects) that don't touch OBJ tile VRAM
-    // or OAM at all and would otherwise keep hitting a stale cached
-    // upscaled sprite forever.
-    u32 SpritePalEpochA = 0;
-    u32 SpritePalEpochB = 0;
+    // changes, tracked at the granularity sprites actually key off of
+    // (16-color bank / whole-256 standard table / extended-palette
+    // slot) so a write to ONE bank/slot doesn't invalidate every
+    // cached sprite using every OTHER bank/slot too - that used to
+    // cause a full-cache rebuild storm (and same-frame LRU eviction
+    // of still-in-use layers) on any per-frame palette animation.
+    u16 ObjPalShadow[2][256] = {};   // last-seen standard OBJ palette (u16 BGR555 entries), per engine
+    u32 ObjPalBankEpoch[2][16] = {}; // per 16-color bank, for Type 0 sprites
+    u32 ObjPalStdEpoch[2] = {};      // whole-256 table, for Type 1 sprites w/ standard palette (PalOffset==0)
+    u32 ObjExtPalEpoch[2][16] = {};  // per extended-palette slot, for Type 1 sprites w/ ext palette
     void RefreshSpriteVRAMGenerations(); // call once per PrerenderSprites(), before any cache lookups
-    u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, bool engineB) const;
+    u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, u32 palOffset, bool engineB) const;
+    void UpdateObjPalStdEpoch(int engine);
 
     struct sScanlineConfig
     {

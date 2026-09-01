@@ -728,7 +728,9 @@ void GLRenderer2D::UpdateAndRender(int line)
             if (objExtPalDirty.CheckRange(0, 16))
             {
                 SpriteDirty = true;
-                SpritePalEpochA++;
+                for (int slot = 0; slot < 16; slot++)
+                    if (objExtPalDirty.CheckRange(slot, 1))
+                        ObjExtPalEpoch[0][slot]++;
             }
         }
         else
@@ -745,7 +747,9 @@ void GLRenderer2D::UpdateAndRender(int line)
             if (objExtPalDirty.CheckRange(0, 16))
             {
                 SpriteDirty = true;
-                SpritePalEpochB++;
+                for (int slot = 0; slot < 16; slot++)
+                    if (objExtPalDirty.CheckRange(slot, 1))
+                        ObjExtPalEpoch[1][slot]++;
             }
         }
     }
@@ -922,8 +926,7 @@ void GLRenderer2D::UpdateAndRender(int line)
     if (GPU.PaletteDirty & objpalmask)
     {
         SpriteDirty = true;
-        if (GPU2D.Num == 0) SpritePalEpochA++;
-        else SpritePalEpochB++;
+        UpdateObjPalStdEpoch(GPU2D.Num == 0 ? 0 : 1);
     }
     GPU.PaletteDirty &= ~objpalmask;
 
@@ -1879,7 +1882,38 @@ void GLRenderer2D::RefreshSpriteVRAMGenerations()
             SpriteVRAMGenerationB[i]++;
 }
 
-u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, bool engineB) const
+void GLRenderer2D::UpdateObjPalStdEpoch(int engine)
+{
+    // Diff against a shadow copy so we only bump the banks that
+    // actually changed value, not just the ones that got written
+    // (a game may rewrite the same color every frame with no visible
+    // change - that shouldn't count as a cache-busting change).
+    const u16* src = (const u16*)&GPU.Palette[engine ? 0x600 : 0x200];
+    u16* shadow = ObjPalShadow[engine];
+    bool anyChanged = false;
+    for (int bank = 0; bank < 16; bank++)
+    {
+        bool bankChanged = false;
+        for (int c = 0; c < 16; c++)
+        {
+            int idx = bank * 16 + c;
+            if (shadow[idx] != src[idx])
+            {
+                shadow[idx] = src[idx];
+                bankChanged = true;
+            }
+        }
+        if (bankChanged)
+        {
+            ObjPalBankEpoch[engine][bank]++;
+            anyChanged = true;
+        }
+    }
+    if (anyChanged)
+        ObjPalStdEpoch[engine]++;
+}
+
+u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, u32 palOffset, bool engineB) const
 {
     // Content proxy: fold together the generation counters of every
     // 512-byte OBJ VRAM region this sprite's tiles fall in. Two frames
@@ -1903,15 +1937,32 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
         h *= 1099511628211ull;
     }
 
-    // Bitmap sprites (Type 2) sample VRAM colors directly and don't
-    // touch OBJ palette RAM at all, so leave them out of the palette
-    // epoch - keeps their cache entries stable across unrelated
-    // palette-cycling effects.
-    if (type != 2)
+    // Fold in only the palette epoch this sprite actually depends on -
+    // not a global "anything changed" counter, so animating one
+    // bank/slot doesn't invalidate every other sprite's cache entry.
+    // Type 2/3/4 (direct-color / display-capture bitmap) sprites don't
+    // use a color palette at all (PalOffset there is an alpha value).
+    int engineIdx = engineB ? 1 : 0;
+    if (type == 0)
     {
-        u32 palEpoch = engineB ? SpritePalEpochB : SpritePalEpochA;
-        h ^= palEpoch;
+        // 16-color: PalOffset is bank*16 (see UpdateOAM)
+        int bank = (int)(palOffset >> 4) & 0xF;
+        h ^= ObjPalBankEpoch[engineIdx][bank];
         h *= 1099511628211ull;
+    }
+    else if (type == 1)
+    {
+        if (palOffset == 0)
+        {
+            h ^= ObjPalStdEpoch[engineIdx];
+            h *= 1099511628211ull;
+        }
+        else
+        {
+            int slot = (int)(palOffset - 1) & 0xF;
+            h ^= ObjExtPalEpoch[engineIdx][slot];
+            h *= 1099511628211ull;
+        }
     }
 
     return h;
@@ -1925,7 +1976,7 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
         s.TileOffset, s.TileStride, s.PalOffset,
         s.Size[0], s.Size[1], s.Flip[0], s.Flip[1],
         s.OBJMode, s.Mosaic, s.Type,
-        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, s.Type, GPU2D.Num != 0)
+        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, s.Type, s.PalOffset, GPU2D.Num != 0)
     };
 
     auto it = SpriteUpscaleCache.find(key);
@@ -1987,10 +2038,18 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
 
 void GLRenderer2D::EvictLRUSpriteCacheEntry()
 {
+    // Never evict an entry that was already used THIS frame - it may
+    // still be referenced by an OAM slot processed earlier in the
+    // same frame's sprite pass, and overwriting its GPU layer now
+    // would corrupt that already-recorded reference (visible as
+    // wrong/black content appearing mid-image). Only reclaim entries
+    // left over from a previous frame.
     auto oldest = SpriteUpscaleCache.end();
     u64 oldestFrame = ~0ull;
     for (auto it = SpriteUpscaleCache.begin(); it != SpriteUpscaleCache.end(); ++it)
     {
+        if (it->second.LastUsedFrame >= SpriteCacheFrameCounter)
+            continue; // used this frame - not eligible
         if (it->second.LastUsedFrame < oldestFrame)
         {
             oldestFrame = it->second.LastUsedFrame;
