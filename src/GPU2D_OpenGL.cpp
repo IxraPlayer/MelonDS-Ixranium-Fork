@@ -658,6 +658,7 @@ bool GLRenderer2D::IsScreenOn()
 void GLRenderer2D::UpdateAndRender(int line)
 {
     u32 palmask = 1 << (GPU2D.Num * 2);
+    u32 objpalmask = 1 << (GPU2D.Num * 2 + 1);
 
     // check if any 'critical' registers were modified
 
@@ -724,6 +725,11 @@ void GLRenderer2D::UpdateAndRender(int line)
             GPU.MakeVRAMFlat_ABGExtPalCoherent(bgExtPalDirty);
             objExtPalDirty = GPU.VRAMDirty_AOBJExtPal.DeriveState(&GPU.VRAMMap_AOBJExtPal, GPU);
             GPU.MakeVRAMFlat_AOBJExtPalCoherent(objExtPalDirty);
+            if (objExtPalDirty.CheckRange(0, 16))
+            {
+                SpriteDirty = true;
+                SpritePalEpochA++;
+            }
         }
         else
         {
@@ -736,6 +742,11 @@ void GLRenderer2D::UpdateAndRender(int line)
             GPU.MakeVRAMFlat_BBGExtPalCoherent(bgExtPalDirty);
             objExtPalDirty = GPU.VRAMDirty_BOBJExtPal.DeriveState(&GPU.VRAMMap_BOBJExtPal, GPU);
             GPU.MakeVRAMFlat_BOBJExtPalCoherent(objExtPalDirty);
+            if (objExtPalDirty.CheckRange(0, 16))
+            {
+                SpriteDirty = true;
+                SpritePalEpochB++;
+            }
         }
     }
 
@@ -906,6 +917,13 @@ void GLRenderer2D::UpdateAndRender(int line)
 
             PrerenderLayer(layer);
         }
+    }
+
+    if (GPU.PaletteDirty & objpalmask)
+    {
+        SpriteDirty = true;
+        if (GPU2D.Num == 0) SpritePalEpochA++;
+        else SpritePalEpochB++;
     }
 
     if (SpriteDirty)
@@ -1860,7 +1878,7 @@ void GLRenderer2D::RefreshSpriteVRAMGenerations()
             SpriteVRAMGenerationB[i]++;
 }
 
-u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, bool engineB) const
+u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, bool engineB) const
 {
     // Content proxy: fold together the generation counters of every
     // 512-byte OBJ VRAM region this sprite's tiles fall in. Two frames
@@ -1883,6 +1901,18 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
         h ^= gen[region];
         h *= 1099511628211ull;
     }
+
+    // Bitmap sprites (Type 2) sample VRAM colors directly and don't
+    // touch OBJ palette RAM at all, so leave them out of the palette
+    // epoch - keeps their cache entries stable across unrelated
+    // palette-cycling effects.
+    if (type != 2)
+    {
+        u32 palEpoch = engineB ? SpritePalEpochB : SpritePalEpochA;
+        h ^= palEpoch;
+        h *= 1099511628211ull;
+    }
+
     return h;
 }
 
@@ -1894,7 +1924,7 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
         s.TileOffset, s.TileStride, s.PalOffset,
         s.Size[0], s.Size[1], s.Flip[0], s.Flip[1],
         s.OBJMode, s.Mosaic, s.Type,
-        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, GPU2D.Num != 0)
+        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, s.Type, GPU2D.Num != 0)
     };
 
     auto it = SpriteUpscaleCache.find(key);

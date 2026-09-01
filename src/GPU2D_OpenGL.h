@@ -261,8 +261,16 @@ private:
     static constexpr u32 kSpriteVRAMRegionSize = 512; // matches VRAMDirtyGranularity in GPU.h
     std::vector<u32> SpriteVRAMGenerationA; // sized 256*1024/512 regions (engine A OBJ)
     std::vector<u32> SpriteVRAMGenerationB; // sized 128*1024/512 regions (engine B OBJ)
+
+    // Bumped whenever this engine's OBJ palette (standard or extended)
+    // changes, so ContentHash also reflects palette recolors (e.g. hit
+    // flash / palette-cycling effects) that don't touch OBJ tile VRAM
+    // or OAM at all and would otherwise keep hitting a stale cached
+    // upscaled sprite forever.
+    u32 SpritePalEpochA = 0;
+    u32 SpritePalEpochB = 0;
     void RefreshSpriteVRAMGenerations(); // call once per PrerenderSprites(), before any cache lookups
-    u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, bool engineB) const;
+    u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, u32 type, bool engineB) const;
 
     struct sScanlineConfig
     {
