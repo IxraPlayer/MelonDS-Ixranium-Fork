@@ -20,6 +20,8 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 #include "OpenGLSupport.h"
 #include "GPU2D.h"
 
@@ -177,6 +179,74 @@ private:
     } SpriteConfig;
     int NumSprites;
     bool SpriteUseMosaic;
+
+    // Ixranium: per-sprite upscaled-image cache. Instead of re-upscaling
+    // the whole 1024x512 sprite atlas every frame PrerenderSprites()
+    // runs, each OAM entry's native sprite image is upscaled ONCE (keyed
+    // by everything that affects its pixels) and reused from a GL
+    // texture array on every subsequent frame where the same sprite
+    // content reappears - the common case for idle/looping animation
+    // frames, repeated enemy sprites, UI icons, etc.
+    struct SpriteCacheKey
+    {
+        u32 TileOffset, TileStride, PalOffset;
+        s32 SizeX, SizeY, FlipX, FlipY;
+        u32 OBJMode, Mosaic;
+        u64 ContentHash; // hash of the referenced VRAM tile bytes
+
+        bool operator==(const SpriteCacheKey& o) const
+        {
+            return TileOffset==o.TileOffset && TileStride==o.TileStride &&
+                   PalOffset==o.PalOffset && SizeX==o.SizeX && SizeY==o.SizeY &&
+                   FlipX==o.FlipX && FlipY==o.FlipY && OBJMode==o.OBJMode &&
+                   Mosaic==o.Mosaic && ContentHash==o.ContentHash;
+        }
+    };
+    struct SpriteCacheKeyHash
+    {
+        size_t operator()(const SpriteCacheKey& k) const noexcept
+        {
+            // Simple FNV-1a style fold; adequate for a lookup table key,
+            // not a cryptographic hash.
+            u64 h = 1469598103934665603ull;
+            const u32 words[] = {k.TileOffset, k.TileStride, k.PalOffset,
+                (u32)k.SizeX, (u32)k.SizeY, (u32)k.FlipX, (u32)k.FlipY,
+                k.OBJMode, k.Mosaic};
+            for (u32 w : words) { h ^= w; h *= 1099511628211ull; }
+            h ^= k.ContentHash; h *= 1099511628211ull;
+            return (size_t)h;
+        }
+    };
+    struct SpriteCacheEntry
+    {
+        int ArrayLayer;
+        u64 LastUsedFrame;
+    };
+    std::unordered_map<SpriteCacheKey, SpriteCacheEntry, SpriteCacheKeyHash> SpriteUpscaleCache;
+    GLuint SpriteUpscaleCacheArray = 0; // GL_TEXTURE_2D_ARRAY, one 4x-upscaled sprite per layer
+    std::vector<bool> SpriteCacheLayerFree;
+    u64 SpriteCacheFrameCounter = 0;
+    static constexpr int kSpriteCacheMaxLayers = 256; // native max sprite is 64x64 -> 256x256 upscaled
+    static constexpr int kSpriteCacheLayerDim = 256;  // 64*4, biggest native OBJ size upscaled
+
+    // Computes the cache key for OAM entry i and, on miss, upscales just
+    // that sprite's native image into a free cache layer; on hit, reuses
+    // the existing layer. Returns the array layer to sample from, or -1
+    // if the sprite couldn't be cached (falls back to the old whole-
+    // atlas path for that frame as a safety net).
+    int GetOrBuildUpscaledSprite(int oamIndex);
+    void EvictLRUSpriteCacheEntry();
+    // Per-512-byte OBJ VRAM region "generation" counters, bumped when
+    // GPU.VRAMDirty_AOBJ/BOBJ (already maintained by the emu core for
+    // exactly this kind of invalidation - see GPU3D_Texcache.h's
+    // Update() using the sibling VRAMDirty_Texture the same way) mark a
+    // region dirty. Cheap CPU-side proxy for "did this sprite's tile
+    // data change" - no GPU readback needed, unlike hashing pixels.
+    static constexpr u32 kSpriteVRAMRegionSize = 512; // matches VRAMDirtyGranularity in GPU.h
+    std::vector<u32> SpriteVRAMGenerationA; // sized 256*1024/512 regions (engine A OBJ)
+    std::vector<u32> SpriteVRAMGenerationB; // sized 128*1024/512 regions (engine B OBJ)
+    void RefreshSpriteVRAMGenerations(); // call once per PrerenderSprites(), before any cache lookups
+    u64 HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, bool engineB) const;
 
     struct sScanlineConfig
     {

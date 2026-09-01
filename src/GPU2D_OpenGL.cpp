@@ -1632,6 +1632,76 @@ void GLRenderer2D::UpdateCompositorConfig()
 
 void GLRenderer2D::PrerenderSprites()
 {
+    SpriteCacheFrameCounter++;
+
+    const bool ixraniumSprites =
+        melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) &&
+        melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed);
+
+    // --- Ixranium fast path: per-sprite cache -----------------------
+    // Instead of drawing every sprite into the native 1024x512 atlas
+    // and then upscaling the WHOLE atlas every frame (the old
+    // behaviour, still used below when caching is off/unavailable),
+    // look each OAM entry up in SpriteUpscaleCache first. Cache hits
+    // (the common case for anything on-screen more than one frame -
+    // idle poses, looping animation frames, repeated enemies/icons)
+    // cost nothing but a hash + map lookup. Only genuinely new sprite
+    // content pays for an upscale, and it's upscaled at its OWN native
+    // size (max 64x64 -> 256x256), not the whole 1024x512 atlas.
+    if (ixraniumSprites)
+    {
+        RefreshSpriteVRAMGenerations(); // once per frame, before any lookups
+
+        bool allCached = true;
+        int layers[128];
+
+        for (int i = 0; i < NumSprites; i++)
+        {
+            auto& sprite = SpriteConfig.uOAM[i];
+            if (sprite.Type >= 3) { layers[i] = -1; continue; }
+
+            int layer = GetOrBuildUpscaledSprite(i);
+            layers[i] = layer;
+            if (layer < 0) allCached = false; // cache full / OOM this frame
+        }
+
+        if (allCached)
+        {
+            // Compose the final upscaled atlas by blitting each
+            // sprite's cached (already-upscaled) layer to its
+            // position - cheap compared to re-upscaling everything,
+            // since each blit only touches that sprite's own pixels.
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_BLEND);
+            glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            glDepthMask(GL_FALSE);
+
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpFB);
+            glViewport(0, 0, 1024*4, 512*4);
+            glUseProgram(SpriteCacheBlitShader);
+            glBindBufferBase(GL_UNIFORM_BUFFER, 21, SpriteConfigUBO);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, SpriteUpscaleCacheArray);
+
+            for (int i = 0; i < NumSprites; i++)
+            {
+                if (layers[i] < 0) continue;
+                glUniform1i(SpriteCacheBlitLayerULoc, layers[i]);
+                glUniform1i(SpriteCacheBlitSpriteIdxULoc, i);
+                glBindVertexArray(Parent.RectVtxArray);
+                glDrawArrays(GL_TRIANGLES, 0, 2*3);
+            }
+
+            glUseProgram(SpritePreShader);
+            return; // done - old whole-atlas path skipped entirely
+        }
+        // Cache was full/unavailable for at least one sprite this
+        // frame: fall through to the original path below as a safety
+        // net so we always still render something correct.
+    }
+
+    // --- Original path (Classic mode, or Ixranium cache miss/fallback) ---
     u16* vtxbuf = SpritePreVtxData;
     int vtxnum = 0;
 
@@ -1674,15 +1744,10 @@ void GLRenderer2D::PrerenderSprites()
 
     // "Ixranium Graphics" (sprites): same BGUpscaleShader pass used for
     // BG layers (see PrerenderLayer), just pointed at the whole sprite
-    // atlas instead of one BG layer's texture - the atlas is one shared
-    // 1024x512 image for every sprite this frame, so one pass here
-    // covers all of them. Restores SpritePreShader afterward since this
-    // function may run again for a second screen - no texture restore
-    // needed alongside it, unlike PrerenderLayer's loop, because the
-    // caller always rebinds VRAMTex_OBJ/PalTex_OBJ itself right before
-    // each PrerenderSprites() call (see UpdateAndRender).
-    if (melonDS::IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) &&
-        melonDS::IxraniumSpritesEnabled.load(std::memory_order_relaxed))
+    // atlas instead of one BG layer's texture. Only reached now when
+    // the per-sprite cache path above couldn't fully service this
+    // frame (cache exhausted) - kept as a correctness fallback.
+    if (ixraniumSprites)
     {
         glUseProgram(BGUpscaleShader);
         glUniform2i(BGUpscaleSrcSizeULoc, 1024, 512);
@@ -1698,6 +1763,143 @@ void GLRenderer2D::PrerenderSprites()
         glDrawArrays(GL_TRIANGLES, 0, 2*3);
 
         glUseProgram(SpritePreShader);
+    }
+}
+
+void GLRenderer2D::RefreshSpriteVRAMGenerations()
+{
+    // One-time-per-frame cost: derive which OBJ VRAM regions changed
+    // since last frame (the emu core already tracks this bitfield for
+    // GPU3D_Texcache's own invalidation - see its Update() calling the
+    // sibling MakeVRAMFlat_TextureCoherent) and bump that region's
+    // generation counter. Cheap - a bitfield scan over a few hundred
+    // bits, not a pixel comparison - and happens once, not per-sprite.
+    if (SpriteVRAMGenerationA.empty())
+        SpriteVRAMGenerationA.resize((256*1024)/kSpriteVRAMRegionSize, 0);
+    if (SpriteVRAMGenerationB.empty())
+        SpriteVRAMGenerationB.resize((128*1024)/kSpriteVRAMRegionSize, 0);
+
+    auto dirtyA = GPU2D.GPU.VRAMDirty_AOBJ.DeriveState(GPU2D.GPU.VRAMMap_AOBJ, GPU2D.GPU);
+    auto dirtyB = GPU2D.GPU.VRAMDirty_BOBJ.DeriveState(GPU2D.GPU.VRAMMap_BOBJ, GPU2D.GPU);
+
+    for (size_t i = 0; i < SpriteVRAMGenerationA.size(); i++)
+        if (dirtyA.Data[i / 64] & (1ull << (i % 64)))
+            SpriteVRAMGenerationA[i]++;
+    for (size_t i = 0; i < SpriteVRAMGenerationB.size(); i++)
+        if (dirtyB.Data[i / 64] & (1ull << (i % 64)))
+            SpriteVRAMGenerationB[i]++;
+}
+
+u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int sizeY, u32 objMode, bool engineB) const
+{
+    // Content proxy: fold together the generation counters of every
+    // 512-byte OBJ VRAM region this sprite's tiles fall in. Two frames
+    // where a sprite's underlying VRAM content is unchanged get the
+    // exact same value here (their regions' generations didn't bump),
+    // so the cache correctly treats them as identical without ever
+    // reading a pixel - two frames where the tile data DID change
+    // (new animation frame, VRAM bank swap) get a different value
+    // because at least one covered region's generation moved on.
+    const auto& gen = engineB ? SpriteVRAMGenerationB : SpriteVRAMGenerationA;
+    const u32 regionCount = (u32)gen.size();
+    const int tilesUsed = std::max(1, (sizeY + 7) / 8); // rows of tiles this sprite spans
+    const u32 rowBytes = std::max<u32>(tileStride, 1);
+
+    u64 h = 1469598103934665603ull;
+    for (int row = 0; row < tilesUsed; row++)
+    {
+        u32 addr = tileOffset + (u32)row * rowBytes;
+        u32 region = (addr / kSpriteVRAMRegionSize) % std::max<u32>(regionCount, 1);
+        h ^= gen[region];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
+{
+    auto& s = SpriteConfig.uOAM[oamIndex];
+
+    SpriteCacheKey key{
+        s.TileOffset, s.TileStride, s.PalOffset,
+        s.Size[0], s.Size[1], s.Flip[0], s.Flip[1],
+        s.OBJMode, s.Mosaic,
+        HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, GPU2D.Num != 0)
+    };
+
+    auto it = SpriteUpscaleCache.find(key);
+    if (it != SpriteUpscaleCache.end())
+    {
+        it->second.LastUsedFrame = SpriteCacheFrameCounter;
+        return it->second.ArrayLayer;
+    }
+
+    // Miss: find a free layer, evicting the least-recently-used entry
+    // if the cache is full (mirrors GPU3D_Texcache's cap-based eviction
+    // philosophy rather than growing unbounded).
+    int freeLayer = -1;
+    for (int l = 0; l < kSpriteCacheMaxLayers; l++)
+        if (SpriteCacheLayerFree[l]) { freeLayer = l; break; }
+    if (freeLayer < 0)
+    {
+        EvictLRUSpriteCacheEntry();
+        for (int l = 0; l < kSpriteCacheMaxLayers; l++)
+            if (SpriteCacheLayerFree[l]) { freeLayer = l; break; }
+    }
+    if (freeLayer < 0)
+        return -1; // shouldn't happen (128 sprites max < 256 layers), safety net
+
+    SpriteCacheLayerFree[freeLayer] = false;
+
+    // Render just THIS sprite at native size into a small scratch FB,
+    // then upscale 4x straight into its cache layer - both passes are
+    // sized to the sprite (up to 64x64 native / 256x256 upscaled), not
+    // the 1024x512 atlas, so cost scales with new content only.
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteScratchFB);
+    glViewport(0, 0, s.Size[0], s.Size[1]);
+    glUseProgram(SpritePreShader);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 21, SpriteConfigUBO);
+    // draw single-sprite quad indexed at oamIndex into scratch, same
+    // vertex layout as the bulk path above, vtxnum=6, index=oamIndex
+    u16 quad[18] = {0,1,(u16)oamIndex, 1,0,(u16)oamIndex, 1,1,(u16)oamIndex,
+                     0,1,(u16)oamIndex, 0,0,(u16)oamIndex, 1,0,(u16)oamIndex};
+    glBindBuffer(GL_ARRAY_BUFFER, SpritePreVtxBuffer);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(quad), quad);
+    glBindVertexArray(SpritePreVtxArray);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glUseProgram(BGUpscaleShader);
+    glUniform2i(BGUpscaleSrcSizeULoc, s.Size[0], s.Size[1]);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, SpriteScratchTex);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpscaleCacheFB);
+    glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               SpriteUpscaleCacheArray, 0, freeLayer);
+    glViewport(0, 0, s.Size[0]*4, s.Size[1]*4);
+    glBindBuffer(GL_ARRAY_BUFFER, Parent.RectVtxBuffer);
+    glBindVertexArray(Parent.RectVtxArray);
+    glDrawArrays(GL_TRIANGLES, 0, 2*3);
+
+    SpriteUpscaleCache[key] = { freeLayer, SpriteCacheFrameCounter };
+    return freeLayer;
+}
+
+void GLRenderer2D::EvictLRUSpriteCacheEntry()
+{
+    auto oldest = SpriteUpscaleCache.end();
+    u64 oldestFrame = ~0ull;
+    for (auto it = SpriteUpscaleCache.begin(); it != SpriteUpscaleCache.end(); ++it)
+    {
+        if (it->second.LastUsedFrame < oldestFrame)
+        {
+            oldestFrame = it->second.LastUsedFrame;
+            oldest = it;
+        }
+    }
+    if (oldest != SpriteUpscaleCache.end())
+    {
+        SpriteCacheLayerFree[oldest->second.ArrayLayer] = true;
+        SpriteUpscaleCache.erase(oldest);
     }
 }
 
