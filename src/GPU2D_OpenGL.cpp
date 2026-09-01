@@ -1893,7 +1893,7 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
     SpriteCacheKey key{
         s.TileOffset, s.TileStride, s.PalOffset,
         s.Size[0], s.Size[1], s.Flip[0], s.Flip[1],
-        s.OBJMode, s.Mosaic,
+        s.OBJMode, s.Mosaic, s.Type,
         HashSpriteVRAM(s.TileOffset, s.TileStride, s.Size[0], s.Size[1], s.OBJMode, GPU2D.Num != 0)
     };
 

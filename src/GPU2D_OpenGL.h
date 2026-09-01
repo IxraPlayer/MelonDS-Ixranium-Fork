@@ -205,7 +205,7 @@ private:
     {
         u32 TileOffset, TileStride, PalOffset;
         s32 SizeX, SizeY, FlipX, FlipY;
-        u32 OBJMode, Mosaic;
+        u32 OBJMode, Mosaic, Type;
         u64 ContentHash; // hash of the referenced VRAM tile bytes
 
         bool operator==(const SpriteCacheKey& o) const
@@ -213,7 +213,7 @@ private:
             return TileOffset==o.TileOffset && TileStride==o.TileStride &&
                    PalOffset==o.PalOffset && SizeX==o.SizeX && SizeY==o.SizeY &&
                    FlipX==o.FlipX && FlipY==o.FlipY && OBJMode==o.OBJMode &&
-                   Mosaic==o.Mosaic && ContentHash==o.ContentHash;
+                   Mosaic==o.Mosaic && Type==o.Type && ContentHash==o.ContentHash;
         }
     };
     struct SpriteCacheKeyHash
@@ -225,7 +225,7 @@ private:
             u64 h = 1469598103934665603ull;
             const u32 words[] = {k.TileOffset, k.TileStride, k.PalOffset,
                 (u32)k.SizeX, (u32)k.SizeY, (u32)k.FlipX, (u32)k.FlipY,
-                k.OBJMode, k.Mosaic};
+                k.OBJMode, k.Mosaic, k.Type};
             for (u32 w : words) { h ^= w; h *= 1099511628211ull; }
             h ^= k.ContentHash; h *= 1099511628211ull;
             return (size_t)h;
