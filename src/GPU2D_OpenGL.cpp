@@ -1777,29 +1777,6 @@ void GLRenderer2D::PrerenderSprites()
             if (layer < 0) { allCached = false; dbgNegAfterBuild++; } // cache full / OOM this frame
         }
 
-        static int dbgFrameCounter = 0;
-        if ((dbgFrameCounter++ % 60) == 0)
-        {
-            int typeCount[9] = {0};
-            for (int i = 0; i < NumSprites; i++)
-            {
-                int t = SpriteConfig.uOAM[i].Type;
-                if (t >= 0 && t < 9) typeCount[t]++;
-            }
-            FILE* f = fopen("ixranium_sprite_debug.log", "a");
-            if (f)
-            {
-                fprintf(f, "[engine %d] NumSprites=%d types(0-8)=%d,%d,%d,%d,%d,%d,%d,%d,%d "
-                           "type>=3skipped=%d cacheFullOrOOM=%d allCached=%d path=%s\n",
-                        GPU2D.Num, NumSprites,
-                        typeCount[0], typeCount[1], typeCount[2], typeCount[3], typeCount[4],
-                        typeCount[5], typeCount[6], typeCount[7], typeCount[8],
-                        dbgType3, dbgNegAfterBuild, (int)allCached,
-                        allCached ? "FAST_BLIT" : "FALLBACK_ORIGINAL");
-                fclose(f);
-            }
-        }
-
         if (allCached)
         {
             // Compose the final upscaled atlas by blitting each
@@ -1985,6 +1962,16 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
     const u32 regionCount = (u32)gen.size();
     const int tilesUsed = std::max(1, (sizeY + 7) / 8); // rows of tiles this sprite spans
     const u32 rowBytes = std::max<u32>(tileStride, 1);
+    // Real OBJ VRAM wraps by BYTE ADDRESS (hardware mirrors the bank),
+    // not by region-index count. Wrapping the region index via
+    // "region % regionCount" instead of masking the byte address first
+    // gives a different (wrong) region for rows whose bytes straddle
+    // the actual VRAM wrap point - exactly the large-stride case that
+    // 64x64 rotoscale sprites hit hardest, aliasing their hash with an
+    // unrelated region's generation counter and serving a stale/wrong
+    // cached layer for one frame. Mask the address first, like the rest
+    // of the renderer does via uVRAMMask, then derive regions from that.
+    const u32 vramMask = std::max<u32>(regionCount, 1) * kSpriteVRAMRegionSize - 1;
 
     u64 h = 1469598103934665603ull;
     for (int row = 0; row < tilesUsed; row++)
@@ -1996,15 +1983,18 @@ u64 GLRenderer2D::HashSpriteVRAM(u32 tileOffset, u32 tileStride, int sizeX, int 
         // in the rest of the row, so a real content change there would
         // never be noticed and the cache would keep serving stale tile
         // data - fold in EVERY region the row's bytes actually cover.
-        u32 rowStart = tileOffset + (u32)row * rowBytes;
-        u32 rowEnd = rowStart + rowBytes; // exclusive
-        u32 regionStart = rowStart / kSpriteVRAMRegionSize;
-        u32 regionEnd = (rowEnd + kSpriteVRAMRegionSize - 1) / kSpriteVRAMRegionSize; // exclusive
-        for (u32 region = regionStart; region < regionEnd; region++)
+        u32 rowStart = (tileOffset + (u32)row * rowBytes) & vramMask;
+        for (u32 off = 0; off < rowBytes; off += kSpriteVRAMRegionSize)
         {
-            h ^= gen[region % std::max<u32>(regionCount, 1)];
+            u32 region = ((rowStart + off) & vramMask) / kSpriteVRAMRegionSize;
+            h ^= gen[region];
             h *= 1099511628211ull;
         }
+        // make sure the row's last byte's region is folded in even if
+        // rowBytes isn't a multiple of kSpriteVRAMRegionSize
+        u32 lastRegion = ((rowStart + rowBytes - 1) & vramMask) / kSpriteVRAMRegionSize;
+        h ^= gen[lastRegion];
+        h *= 1099511628211ull;
     }
 
     // Fold in only the palette epoch this sprite actually depends on -
