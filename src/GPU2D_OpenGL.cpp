@@ -2463,6 +2463,18 @@ void GLRenderer2D::DrawSprites(u32 line)
     u8* vram; u32 vrammask;
     GPU2D.GetOBJVRAM(vram, vrammask);
 
+    // Caller (UpdateOAM's SpriteDirty block) left GL_TEXTURE1 active
+    // after binding PalTex_OBJ there. Without forcing unit 0 back here,
+    // this bind lands on unit 1 instead and clobbers the PalTex_OBJ
+    // binding that GetOrBuildUpscaledSprite's SpriteScratchShader draws
+    // (right after this function returns) rely on for sampler "PalTex"
+    // (fixed to unit 1) - every sprite cached this frame then samples
+    // VRAMTex_OBJ as its palette, producing garbled colors that persist
+    // in the cache until that sprite's content changes again. Only
+    // screens with new/changing OBJ content each frame ever call this
+    // path often enough to show it, which is why only one screen
+    // appeared corrupted.
+    glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
 
     int texlen = (GPU2D.Num ? 256 : 512) >> 6;
