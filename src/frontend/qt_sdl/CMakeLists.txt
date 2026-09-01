@@ -40,6 +40,7 @@ set(SOURCES_QT_SDL
     DebugSettingsDialog.cpp
     DebugOverlayStats.h
     DebugOverlayFields.h
+    AtlasSettingsDialog.cpp
     WelcomeDialog.cpp
     ROMInfoDialog.cpp
     RAMInfoDialog.cpp
