@@ -162,6 +162,7 @@ bool GLRenderer2D::InitShaders()
     uniloc = glGetUniformLocation(BGUpscaleShader, "SrcTex");
     glUniform1i(uniloc, 0);
     BGUpscaleSrcSizeULoc = glGetUniformLocation(BGUpscaleShader, "uSrcSize");
+    BGUpscaleCellSizeULoc = glGetUniformLocation(BGUpscaleShader, "uCellSize");
 
 
     glUseProgram(SpriteCacheBlitShader);
@@ -253,6 +254,7 @@ bool GLRenderer2D::InitShaders(GLRenderer2D& other)
     SpriteScaleULoc = other.SpriteScaleULoc;
     CompositorScaleULoc = other.CompositorScaleULoc;
     BGUpscaleSrcSizeULoc = other.BGUpscaleSrcSizeULoc;
+    BGUpscaleCellSizeULoc = other.BGUpscaleCellSizeULoc;
     SpriteCacheBlitLayerULoc = other.SpriteCacheBlitLayerULoc;
     SpriteCacheBlitSpriteIdxULoc = other.SpriteCacheBlitSpriteIdxULoc;
 
@@ -1906,6 +1908,12 @@ void GLRenderer2D::PrerenderSprites()
     {
         glUseProgram(BGUpscaleShader);
         glUniform2i(BGUpscaleSrcSizeULoc, 1024, 512);
+        // SpriteTex is a 16-per-row grid of independent 64x64 sprite
+        // cells, not one contiguous image - tell the shader so its
+        // sharpen pass can't read a neighbouring sprite's texels as if
+        // they belonged to this one (see uCellSize's doc comment in
+        // 2DBGUpscaleFS.glsl).
+        glUniform2i(BGUpscaleCellSizeULoc, 64, 64);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, SpriteTex);
@@ -2158,6 +2166,9 @@ int GLRenderer2D::GetOrBuildUpscaledSprite(int oamIndex)
 
     glUseProgram(BGUpscaleShader);
     glUniform2i(BGUpscaleSrcSizeULoc, s.Size[0], s.Size[1]);
+    // SpriteScratchTex holds exactly one sprite for this call (unlike
+    // the whole-atlas fallback above) - no grid to protect against.
+    glUniform2i(BGUpscaleCellSizeULoc, 0, 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, SpriteScratchTex);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SpriteUpscaleCacheFB);
@@ -2238,6 +2249,7 @@ void GLRenderer2D::PrerenderLayer(int layer)
             printf("[IXRANIUM DEBUG] 2D BG upscale RAN, layer %d, size %dx%d\n", layer, cfg.Size[0], cfg.Size[1]);
         glUseProgram(BGUpscaleShader);
         glUniform2i(BGUpscaleSrcSizeULoc, cfg.Size[0], cfg.Size[1]);
+        glUniform2i(BGUpscaleCellSizeULoc, 0, 0);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, BGLayerTex[layer]);

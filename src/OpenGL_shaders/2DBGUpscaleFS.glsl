@@ -26,6 +26,20 @@
 uniform sampler2D SrcTex;
 uniform ivec2 uSrcSize;
 
+// When SrcTex is a single contiguous image (a BG layer), (0,0) - Fetch
+// just clamps to uSrcSize as before. When SrcTex is actually a GRID of
+// independent images packed into one texture (the sprite atlas: 16
+// unrelated 64x64 sprites per row), set this to the cell size (64,64).
+// Without it, a neighbour read near a sprite's edge can cross into the
+// NEXT sprite's cell - a completely unrelated texture - and get treated
+// as real image content by the edge-detect/sharpen below. Right where
+// that neighbour's colour is very different from the sprite's own (e.g.
+// a white sprite edge next to a dark neighbouring cell), the unsharp
+// mask reads a huge false edge and overshoots hard: black/coloured
+// speckles hugging the sprite's border that visually look like another
+// texture bleeding in - because it is.
+uniform ivec2 uCellSize;
+
 out vec4 oColor;
 
 // Mirrors kColorTolerance (=2, in 0-255 units) in GPU3D_Texcache.h.
@@ -43,9 +57,9 @@ const float kSharpenStrength = 0.2;
 // Mirrors kSaturationBoost in GPU3D_Texcache.h.
 const float kSaturationBoost = 1.05;
 
-vec4 Fetch(ivec2 p)
+vec4 Fetch(ivec2 p, ivec2 cellMin, ivec2 cellMax)
 {
-    p = clamp(p, ivec2(0), uSrcSize - ivec2(1));
+    p = clamp(p, cellMin, cellMax);
     return texelFetch(SrcTex, p, 0);
 }
 
@@ -70,11 +84,24 @@ float TierWeight(int dist)
 // needed for the sharpening step.
 vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
 {
-    vec4 B = Fetch(srcPx + ivec2(0, -1));
-    vec4 D = Fetch(srcPx + ivec2(-1, 0));
-    vec4 E = Fetch(srcPx);
-    vec4 F = Fetch(srcPx + ivec2(1, 0));
-    vec4 H = Fetch(srcPx + ivec2(0, 1));
+    // Cell that srcPx itself belongs to - every neighbour below is
+    // clamped into THIS cell (not just the overall texture), so a read
+    // that would otherwise cross into an adjacent, unrelated sprite's
+    // cell instead repeats srcPx's own edge texel, same as clamp-to-edge
+    // would do at a real texture boundary.
+    ivec2 cellMin = ivec2(0);
+    ivec2 cellMax = uSrcSize - ivec2(1);
+    if (uCellSize.x > 0)
+    {
+        cellMin = (srcPx / uCellSize) * uCellSize;
+        cellMax = min(cellMin + uCellSize - ivec2(1), uSrcSize - ivec2(1));
+    }
+
+    vec4 B = Fetch(srcPx + ivec2(0, -1), cellMin, cellMax);
+    vec4 D = Fetch(srcPx + ivec2(-1, 0), cellMin, cellMax);
+    vec4 E = Fetch(srcPx, cellMin, cellMax);
+    vec4 F = Fetch(srcPx + ivec2(1, 0), cellMin, cellMax);
+    vec4 H = Fetch(srcPx + ivec2(0, 1), cellMin, cellMax);
 
     bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F);
     bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H);

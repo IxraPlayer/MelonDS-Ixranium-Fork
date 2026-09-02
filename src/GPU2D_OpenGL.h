@@ -117,6 +117,7 @@ private:
 
     GLuint BGUpscaleShader;
     GLint BGUpscaleSrcSizeULoc;
+    GLint BGUpscaleCellSizeULoc;
 
     // Ixranium sprite cache blit pass (see PrerenderSprites' cache-hit
     // path) - places each cached, already-upscaled sprite into the 4x
