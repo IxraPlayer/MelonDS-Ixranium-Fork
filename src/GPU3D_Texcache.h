@@ -453,7 +453,7 @@ inline void ParallelForRows(u32 rowCount, Fn&& fn)
 // sharpener - kept at a similarly moderate level for the same reason:
 // enough to make edges/text read as crisper, not enough to grow a
 // visible halo around them.
-inline constexpr float kSharpenStrength = 0.3f;
+inline constexpr float kSharpenStrength = 0.2f;
 
 // Saturation boost applied after sharpening (see ApplySaturationBoost).
 // 1.0 = no change; 1.05 = +5%, kept deliberately subtle - this is meant
@@ -524,8 +524,8 @@ inline constexpr float kEdgeBlend = 0.45f;
 // driven only by its own corner condition, so there's no shared/OR'd
 // condition to reconcile the way EagleUpscale3x's edge cells needed.
 inline constexpr float kTier0 = 1.00f; // the actual corner cell
-inline constexpr float kTier1 = 0.70f; // one step away (two cells)
-inline constexpr float kTier2 = 0.35f; // two steps away (one cell, deepest into the quadrant)
+inline constexpr float kTier1 = 0.85f; // one step away (two cells)
+inline constexpr float kTier2 = 0.55f; // two steps away (one cell, deepest into the quadrant)
 
 inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
 {

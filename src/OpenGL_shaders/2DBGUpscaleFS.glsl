@@ -33,12 +33,12 @@ const float kColorTol = 2.0 / 255.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
 const float kTier0 = 1.00;
-const float kTier1 = 0.70;
-const float kTier2 = 0.35;
+const float kTier1 = 0.85;
+const float kTier2 = 0.55;
 
 // Mirrors kSharpenStrength / the 4.0-28.0 edge-magnitude range / the
 // 0.33-1.5 strength-multiplier range in TextureSharpen (GPU3D_Texcache.h).
-const float kSharpenStrength = 0.3;
+const float kSharpenStrength = 0.2;
 
 // Mirrors kSaturationBoost in GPU3D_Texcache.h.
 const float kSaturationBoost = 1.05;
