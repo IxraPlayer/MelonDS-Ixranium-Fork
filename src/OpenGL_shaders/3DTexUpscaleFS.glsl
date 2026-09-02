@@ -110,18 +110,48 @@ void main()
     vec4 s = GetUpscaled(outPx + ivec2(0, 1));
     vec4 w = GetUpscaled(outPx + ivec2(-1, 0));
     vec4 e = GetUpscaled(outPx + ivec2(1, 0));
+
+    // A neighbour on the far side of a transparency boundary may carry
+    // a matte/backing colour that was never meant to be seen - discard
+    // it in favour of centre's own colour, same fix already applied in
+    // 2DBGUpscaleFS.glsl and GPU3D_Texcache.h's CPU path (this GPU path
+    // never had it, which is why the CPU-side fix alone didn't help
+    // when the hardware/GPU texture cache path is the one actually
+    // active).
+    if (abs(n.a - centre.a) > kColorTol) n.rgb = centre.rgb;
+    if (abs(s.a - centre.a) > kColorTol) s.rgb = centre.rgb;
+    if (abs(w.a - centre.a) > kColorTol) w.rgb = centre.rgb;
+    if (abs(e.a - centre.a) > kColorTol) e.rgb = centre.rgb;
+
     vec4 avg = (n + s + w + e) * 0.25;
 
-    vec3 diff = centre.rgb - avg.rgb;
-    float edgeMag = max(max(abs(diff.r), abs(diff.g)), abs(diff.b));
+    // Sharpen in luma only, then apply the SAME delta to every channel
+    // - sharpening R/G/B independently let each channel overshoot by a
+    // different amount at a high-contrast edge, seen as colour fringing
+    // (e.g. green) rather than brightness fringing. Same fix as
+    // 2DBGUpscaleFS.glsl / GPU3D_Texcache.h.
+    vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+    float lumaCentre = dot(centre.rgb, lumaWeights);
+    float lumaAvg = dot(avg.rgb, lumaWeights);
+    float lumaDiff = lumaCentre - lumaAvg;
+
+    float edgeMag = abs(lumaDiff);
     float edgeFactor = smoothstep(4.0, 28.0, edgeMag);
     float effStrength = uSharpenStrength * (0.33 + edgeFactor * (1.5 - 0.33));
 
-    vec3 sharpened = clamp(centre.rgb + diff * effStrength, 0.0, 255.0);
+    float lumaN = dot(n.rgb, lumaWeights);
+    float lumaS = dot(s.rgb, lumaWeights);
+    float lumaW = dot(w.rgb, lumaWeights);
+    float lumaE = dot(e.rgb, lumaWeights);
+    float lumaLocalMin = min(min(min(lumaCentre, lumaN), min(lumaS, lumaW)), lumaE);
+    float lumaLocalMax = max(max(max(lumaCentre, lumaN), max(lumaS, lumaW)), lumaE);
+
+    float lumaSharpened = clamp(lumaCentre + lumaDiff * effStrength, lumaLocalMin, lumaLocalMax);
+    vec3 sharpened = clamp(centre.rgb + (lumaSharpened - lumaCentre), 0.0, 255.0);
 
     // Saturation boost, luma-preserving - same as
     // TextureSharpenAndSaturate's saturation step.
-    float luma = dot(sharpened, vec3(0.299, 0.587, 0.114));
+    float luma = lumaSharpened;
     vec3 saturated = clamp(luma + (sharpened - luma) * uSaturationBoost, 0.0, 255.0);
 
     oColor = uvec4(uvec3(round(saturated)), uint(centre.a));
