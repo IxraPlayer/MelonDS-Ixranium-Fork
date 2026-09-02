@@ -453,7 +453,7 @@ inline void ParallelForRows(u32 rowCount, Fn&& fn)
 // sharpener - kept at a similarly moderate level for the same reason:
 // enough to make edges/text read as crisper, not enough to grow a
 // visible halo around them.
-inline constexpr float kSharpenStrength = 0.2f;
+inline constexpr float kSharpenStrength = 0.0f; // DIAGNOSTIC: temporarily 0 (was 0.2f) to isolate the green-fringe cause - restore to 0.2f afterwards
 
 // Saturation boost applied after sharpening (see ApplySaturationBoost).
 // 1.0 = no change; 1.05 = +5%, kept deliberately subtle - this is meant
