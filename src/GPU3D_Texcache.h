@@ -779,6 +779,15 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
             u32 c = at(x, y);
             u32 n = at(x, y-1), s = at(x, y+1), wst = at(x-1, y), e = at(x+1, y);
 
+            // A neighbour whose alpha doesn't match centre's may carry a
+            // matte/backing colour that was never meant to be seen - see
+            // TextureSharpenAndSaturate's copy of this fix for why.
+            int alphaC = channel(c, 24);
+            if (std::abs(channel(n, 24) - alphaC) > (int)kColorTolerance) n = (c & 0x00FFFFFF) | (n & 0xFF000000);
+            if (std::abs(channel(s, 24) - alphaC) > (int)kColorTolerance) s = (c & 0x00FFFFFF) | (s & 0xFF000000);
+            if (std::abs(channel(wst, 24) - alphaC) > (int)kColorTolerance) wst = (c & 0x00FFFFFF) | (wst & 0xFF000000);
+            if (std::abs(channel(e, 24) - alphaC) > (int)kColorTolerance) e = (c & 0x00FFFFFF) | (e & 0xFF000000);
+
             // Local contrast, in the same 0-255 units as the channels
             // themselves: the largest single-channel gap between this
             // pixel and its neighbour average. A thin text stroke on a
@@ -916,6 +925,20 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
             ww[i] = channel(wst, shift);
             ee[i] = channel(e, shift);
         }
+
+        // A neighbour whose alpha doesn't match centre's is on the far
+        // side of a transparency boundary - its RGB may be a matte/
+        // backing colour that was never meant to be seen (e.g. a pure
+        // green fill behind an alpha-edged texture), not real image
+        // content. Falling back to centre's own colour for it keeps
+        // that matte colour out of the luma average/edge-detect below,
+        // the same fix 2DBGUpscaleFS.glsl already applies for its
+        // (binary on/off) transparency case.
+        int alphaC = channel(c, 24);
+        if (std::abs(channel(n, 24) - alphaC) > (int)kColorTolerance) { nn[0] = cc[0]; nn[1] = cc[1]; nn[2] = cc[2]; }
+        if (std::abs(channel(s, 24) - alphaC) > (int)kColorTolerance) { ss[0] = cc[0]; ss[1] = cc[1]; ss[2] = cc[2]; }
+        if (std::abs(channel(wst, 24) - alphaC) > (int)kColorTolerance) { ww[0] = cc[0]; ww[1] = cc[1]; ww[2] = cc[2]; }
+        if (std::abs(channel(e, 24) - alphaC) > (int)kColorTolerance) { ee[0] = cc[0]; ee[1] = cc[1]; ee[2] = cc[2]; }
 
         // Sharpen in luma only, then apply the SAME delta to every
         // channel below - sharpening R/G/B independently let each
