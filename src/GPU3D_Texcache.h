@@ -784,41 +784,29 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
             // pixel and its neighbour average. A thin text stroke on a
             // flat background produces a large gap here; a soft
             // gradient produces a small one.
-            int edgeMag = 0;
-            for (int shift = 0; shift < 24; shift += 8)
+            // Local contrast, in luma (not per-channel) - see the fused
+            // TextureSharpenAndSaturate's copy of this comment for why:
+            // per-channel sharpening lets R/G/B overshoot by different
+            // amounts at a hard edge, which shows up as colour fringing
+            // rather than brightness fringing.
+            auto luma = [&](u32 px) -> int
             {
-                int cc = channel(c, shift);
-                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                edgeMag = std::max(edgeMag, std::abs(cc - avg));
-            }
-            // Below ~4/255 of contrast: treat as a smooth gradient, cut
-            // the push back to a third of the requested strength. Above
-            // ~28/255: treat as a real edge, boost up to 1.5x the
-            // requested strength. Everywhere in between blends smoothly
-            // - no hard cutoff/visible banding between the two regimes.
+                return (76*channel(px, 0) + 150*channel(px, 8) + 29*channel(px, 16)) >> 8;
+            };
+            int lumaC = luma(c);
+            int lumaAvg = (luma(n) + luma(s) + luma(wst) + luma(e)) / 4;
+            int edgeMag = std::abs(lumaC - lumaAvg);
             float edgeFactor = smoothstepf(4.0f, 28.0f, (float)edgeMag);
             float effectiveStrength = strength * (0.33f + edgeFactor * (1.5f - 0.33f));
 
+            int lumaLo = std::min(lumaC, std::min(luma(n), std::min(luma(s), std::min(luma(wst), luma(e)))));
+            int lumaHi = std::max(lumaC, std::max(luma(n), std::max(luma(s), std::max(luma(wst), luma(e)))));
+            int lumaSharpened = std::clamp(lumaC + (int)((float)(lumaC - lumaAvg) * effectiveStrength), lumaLo, lumaHi);
+            int delta = lumaSharpened - lumaC;
+
             u32 out = 0;
             for (int shift = 0; shift < 24; shift += 8) // R, G, B - not alpha (shift 24)
-            {
-                int cc = channel(c, shift);
-                int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
-                int sharpened = cc + (int)((float)(cc - avg) * effectiveStrength);
-
-                // Anti-ringing clamp (mirrors 2DBGUpscaleFS.glsl): don't
-                // let a hard edge's sharpened value overshoot past the
-                // min/max this channel actually has among centre + its
-                // 4 neighbours - stops the thin bright/dark fringe an
-                // unsharp mask otherwise puts on high-contrast outlines
-                // (thick black character/UI linework here) without
-                // reducing the sharpening applied to real gradients.
-                int lo = std::min(std::min(cc, channel(n, shift)), std::min(channel(s, shift), std::min(channel(wst, shift), channel(e, shift))));
-                int hi = std::max(std::max(cc, channel(n, shift)), std::max(channel(s, shift), std::max(channel(wst, shift), channel(e, shift))));
-                sharpened = std::clamp(sharpened, lo, hi);
-
-                out |= clampByte(sharpened) << shift;
-            }
+                out |= clampByte(channel(c, shift) + delta) << shift;
             out |= c & 0xFF000000; // alpha passed through unchanged
 
             dst[y * w + x] = out;
@@ -918,39 +906,50 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
     // neighbours are fetched differs.
     auto processPixel = [&](u32 c, u32 n, u32 s, u32 wst, u32 e) -> u32
     {
-        int cc[3], avgv[3];
-        int edgeMag = 0;
+        int cc[3], nn[3], ss[3], ww[3], ee[3];
         for (int i = 0; i < 3; i++)
         {
             int shift = i * 8;
             cc[i] = channel(c, shift);
-            avgv[i] = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) >> 2;
-            edgeMag = std::max(edgeMag, std::abs(cc[i] - avgv[i]));
+            nn[i] = channel(n, shift);
+            ss[i] = channel(s, shift);
+            ww[i] = channel(wst, shift);
+            ee[i] = channel(e, shift);
         }
+
+        // Sharpen in luma only, then apply the SAME delta to every
+        // channel below - sharpening R/G/B independently let each
+        // channel overshoot by a different amount at a high-contrast
+        // edge (thick black outlines against saturated colour), which
+        // reads as an actual colour shift (commonly green) rather than
+        // the intended brightness fringing. A uniform luma delta keeps
+        // hue intact while still sharpening.
+        auto luma = [](int r, int g, int b) -> int { return (76*r + 150*g + 29*b) >> 8; };
+        int lumaC = luma(cc[0], cc[1], cc[2]);
+        int lumaN = luma(nn[0], nn[1], nn[2]);
+        int lumaS = luma(ss[0], ss[1], ss[2]);
+        int lumaW = luma(ww[0], ww[1], ww[2]);
+        int lumaE = luma(ee[0], ee[1], ee[2]);
+        int lumaAvg = (lumaN + lumaS + lumaW + lumaE) >> 2;
+
+        int edgeMag = std::abs(lumaC - lumaAvg);
         int32_t strQ12 = effStrengthQ12[edgeMag];
+
+        int lumaLo = std::min(lumaC, std::min(lumaN, std::min(lumaS, std::min(lumaW, lumaE))));
+        int lumaHi = std::max(lumaC, std::max(lumaN, std::max(lumaS, std::max(lumaW, lumaE))));
+        int lumaSharpened = std::clamp(lumaC + (((lumaC - lumaAvg) * strQ12) >> 12), lumaLo, lumaHi);
+        int delta = lumaSharpened - lumaC;
 
         u32 sharpened = 0;
         for (int i = 0; i < 3; i++)
-        {
-            int shift = i * 8;
-            int v = cc[i] + ((int)(cc[i] - avgv[i]) * strQ12 >> 12);
-            // Anti-ringing clamp - see TextureSharpen's copy of this
-            // same comment above. avgv[i] is already (n+s+w+e)/4 for
-            // this channel, but the clamp needs the actual min/max
-            // across the individual neighbours (not their average), so
-            // it's recomputed here from cc/n/s/wst/e directly.
-            int lo = std::min(cc[i], std::min(channel(n, shift), std::min(channel(s, shift), std::min(channel(wst, shift), channel(e, shift)))));
-            int hi = std::max(cc[i], std::max(channel(n, shift), std::max(channel(s, shift), std::max(channel(wst, shift), channel(e, shift)))));
-            v = std::clamp(v, lo, hi);
-            sharpened |= clampByte(v) << shift;
-        }
+            sharpened |= clampByte(cc[i] + delta) << (i * 8);
         sharpened |= c & 0xFF000000;
 
         int r = channel(sharpened, 0), g = channel(sharpened, 8), b = channel(sharpened, 16);
-        int luma = (76*r + 150*g + 29*b) >> 8;
-        return clampByte(luma + ((r - luma) * satFactorQ12 >> 12))
-             | (clampByte(luma + ((g - luma) * satFactorQ12 >> 12)) << 8)
-             | (clampByte(luma + ((b - luma) * satFactorQ12 >> 12)) << 16)
+        int satLuma = lumaSharpened;
+        return clampByte(satLuma + ((r - satLuma) * satFactorQ12 >> 12))
+             | (clampByte(satLuma + ((g - satLuma) * satFactorQ12 >> 12)) << 8)
+             | (clampByte(satLuma + ((b - satLuma) * satFactorQ12 >> 12)) << 16)
              | (sharpened & 0xFF000000);
     };
 
