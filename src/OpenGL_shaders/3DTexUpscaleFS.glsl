@@ -29,8 +29,9 @@ uniform float uSaturationBoost;
 
 out uvec4 oColor;
 
-// Mirrors kColorTolerance (=2, in 0-255 units) in GPU3D_Texcache.h.
-const float kColorTol = 2.0;
+// Mirrors kColorTolerance (=12, in 0-255 units) in GPU3D_Texcache.h -
+// see that constant's comment for why 12, not the original 2.
+const float kColorTol = 12.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
 const float kTier0 = 1.00;

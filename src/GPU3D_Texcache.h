@@ -97,13 +97,25 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
 }
 
 // How much channel-by-channel slack ColorsClose() allows, in the same
-// 0-255 units the packed texel channels are stored in. Deliberately
-// tiny - big enough to catch a pixel that's "basically" the same
-// colour, nowhere near big enough to catch two genuinely different
-// palette entries placed next to each other for dithering. Change this
-// single constant to adjust; 0 falls back to the exact-match behaviour
-// this project started with.
-inline constexpr u32 kColorTolerance = 2;
+// 0-255 units the packed texel channels are stored in. Used to decide
+// whether two neighbouring pixels are "the same" for the corner-
+// detection logic below (EagleUpscale4x/GPUUpscaleSharpenSaturate) -
+// NOT a general smoothing/blur amount. Was kept very tiny (2) on the
+// assumption that anything bigger would blend two genuinely different
+// palette entries placed next to each other for dithering - but that
+// same tightness means a dithering pixel and its neighbour are always
+// "not close", which can accidentally satisfy the corner-detection
+// conditions meant for real shape corners (an "L" bend in solid
+// colour), not per-pixel dithering noise. A false corner-fire there
+// replicates whatever colour the dither pixel happens to be (e.g. a
+// fine-shading colour that reads as blended only at native pixel
+// density) across a whole 2x2 output block - a speckled colour fringe
+// hugging otherwise-clean high-contrast edges. 12 is loose enough to
+// treat adjacent dithering steps as "the same" (defusing the false
+// corner triggers) while staying well under the gap between two
+// visually distinct palette entries, so real shape corners still
+// upscale the same as before.
+inline constexpr u32 kColorTolerance = 12;
 
 // Persistent worker-thread pool for the row-parallel upscale/sharpen
 // work below. Deliberately NOT spawning std::thread objects per call:
@@ -453,7 +465,7 @@ inline void ParallelForRows(u32 rowCount, Fn&& fn)
 // sharpener - kept at a similarly moderate level for the same reason:
 // enough to make edges/text read as crisper, not enough to grow a
 // visible halo around them.
-inline constexpr float kSharpenStrength = 0.0f; // DIAGNOSTIC: temporarily 0 (was 0.2f) to isolate the green-fringe cause - restore to 0.2f afterwards
+inline constexpr float kSharpenStrength = 0.2f;
 
 // Saturation boost applied after sharpening (see ApplySaturationBoost).
 // 1.0 = no change; 1.05 = +5%, kept deliberately subtle - this is meant
