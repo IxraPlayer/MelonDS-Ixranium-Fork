@@ -212,7 +212,6 @@ private slots:
     void onChangeShowOSD(bool checked);
     void onChangeShowKeyboardPreview(bool checked);
     void onChangeIxraniumGraphics(bool checked);
-    void onChangeIxraniumSprites(bool checked);
     void onChangeLimitFramerate(bool checked);
     void onChangeAudioSync(bool checked);
 
@@ -379,7 +378,6 @@ public:
     QAction* actShowOSD;
     QAction* actShowKeyboardPreview;
     QAction* actIxraniumGraphics;
-    QAction* actIxraniumSprites;
     QAction* actLimitFramerate;
     QAction* actAudioSync;
 

@@ -370,8 +370,7 @@ struct IxraniumProfiler
         n += snprintf(buf+n, sizeof(buf)-n, "==== Ixranium profile (last %llu frames) ====\n", (unsigned long long)kProfileIntervalFrames);
         n += snprintf(buf+n, sizeof(buf)-n, "pool worker threads: %u (0 = fallback, single-threaded)\n", RowWorkerPool::Get().ThreadCount());
         n += snprintf(buf+n, sizeof(buf)-n, "mode: %s\n",
-            !IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) ? "OFF" :
-            (IxraniumSpritesEnabled.load(std::memory_order_relaxed) ? "SPRITES (Classic + 2D sprite atlas upscale)" : "CLASSIC (3D textures + 2D BG layers only, sprites native)"));
+            IxraniumTexUpscaleEnabled.load(std::memory_order_relaxed) ? "ON" : "OFF");
         n += snprintf(buf+n, sizeof(buf)-n, "--- whole-frame wall-clock (CPU emu + ALL rendering + present, not just this texture cache) ---\n");
         n += snprintf(buf+n, sizeof(buf)-n, "frame time avg/min/max ms: %.2f / %.2f / %.2f   (~%.1f FPS avg)\n",
             avgFrameMs, ms(fMin), ms(fMax), avgFps);

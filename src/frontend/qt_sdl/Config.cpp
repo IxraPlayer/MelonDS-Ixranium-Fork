@@ -101,7 +101,6 @@ DefaultList<bool> DefaultBools =
     {"3D.Soft.Threaded", true},
     {"3D.GL.HiresCoordinates", true},
     {"3D.IxraniumTexUpscale", false},
-    {"3D.IxraniumSpritesUpscale", true},
     {"LimitFPS", true},
     {"Instance*.Window*.ShowOSD", true},
     {"Instance*.Window*.ShowKeyboardPreview", false},
