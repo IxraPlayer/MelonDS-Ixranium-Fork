@@ -166,30 +166,37 @@ void main()
 
     vec4 avg = (n + s + w + e) * 0.25;
 
-    vec3 diff = centre.rgb - avg.rgb;
-    float edgeMag = max(max(abs(diff.r), abs(diff.g)), abs(diff.b)) * 255.0;
+    // Sharpen in luma only, then apply the SAME delta to every channel.
+    // Sharpening R/G/B independently (the previous approach) lets each
+    // channel overshoot by a different amount at a high-contrast edge
+    // (thick black outlines against saturated colour, exactly this
+    // game's art style) - the three channels drift apart from each
+    // other right at the edge, which isn't seen as "too bright/dark"
+    // but as an actual colour shift (commonly green, since G carries
+    // the most luma weight and so has the most room to overshoot). A
+    // uniform luma delta moves all channels together, so the edge can
+    // still sharpen but can't change hue while doing it.
+    vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+    float lumaCentre = dot(centre.rgb, lumaWeights);
+    float lumaAvg = dot(avg.rgb, lumaWeights);
+    float lumaDiff = lumaCentre - lumaAvg;
+
+    float edgeMag = abs(lumaDiff) * 255.0;
     float edgeFactor = smoothstep(4.0, 28.0, edgeMag);
     float effStrength = kSharpenStrength * (0.33 + edgeFactor * (1.5 - 0.33));
 
-    vec3 sharpened = centre.rgb + diff * effStrength;
+    float lumaN = dot(n.rgb, lumaWeights);
+    float lumaS = dot(s.rgb, lumaWeights);
+    float lumaW = dot(w.rgb, lumaWeights);
+    float lumaE = dot(e.rgb, lumaWeights);
+    float lumaLocalMin = min(min(min(lumaCentre, lumaN), min(lumaS, lumaW)), lumaE);
+    float lumaLocalMax = max(max(max(lumaCentre, lumaN), max(lumaS, lumaW)), lumaE);
 
-    // Anti-ringing clamp: a hard, high-contrast edge (e.g. the thick
-    // black outlines this game's character art and UI text are drawn
-    // with) is exactly where edgeFactor - and so effStrength - is
-    // largest, which is also exactly where an unsharp mask overshoots
-    // the most: the boosted pixel ends up brighter/darker than every
-    // real colour in its own neighbourhood, seen as a thin fringe
-    // hugging the outline (independent of the alpha-boundary fix
-    // above, which only handles the transparency case). Standard fix,
-    // ~free: clamp the sharpened result to the min/max RGB actually
-    // present across centre + its 4 neighbours, so the sharpen can
-    // push contrast up to what's locally there but never past it.
-    vec3 localMin = min(min(min(centre.rgb, n.rgb), min(s.rgb, w.rgb)), e.rgb);
-    vec3 localMax = max(max(max(centre.rgb, n.rgb), max(s.rgb, w.rgb)), e.rgb);
-    sharpened = clamp(sharpened, localMin, localMax);
+    float lumaSharpened = clamp(lumaCentre + lumaDiff * effStrength, lumaLocalMin, lumaLocalMax);
+    vec3 sharpened = centre.rgb + (lumaSharpened - lumaCentre);
 
     // Saturation boost, luma-preserving - same as ApplySaturationBoost.
-    float luma = dot(sharpened, vec3(0.299, 0.587, 0.114));
+    float luma = lumaSharpened;
     vec3 saturated = clamp(luma + (sharpened - luma) * kSaturationBoost, 0.0, 1.0);
 
     oColor = vec4(saturated, centre.a);
