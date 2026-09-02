@@ -805,6 +805,18 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
                 int cc = channel(c, shift);
                 int avg = (channel(n, shift) + channel(s, shift) + channel(wst, shift) + channel(e, shift)) / 4;
                 int sharpened = cc + (int)((float)(cc - avg) * effectiveStrength);
+
+                // Anti-ringing clamp (mirrors 2DBGUpscaleFS.glsl): don't
+                // let a hard edge's sharpened value overshoot past the
+                // min/max this channel actually has among centre + its
+                // 4 neighbours - stops the thin bright/dark fringe an
+                // unsharp mask otherwise puts on high-contrast outlines
+                // (thick black character/UI linework here) without
+                // reducing the sharpening applied to real gradients.
+                int lo = std::min(std::min(cc, channel(n, shift)), std::min(channel(s, shift), std::min(channel(wst, shift), channel(e, shift))));
+                int hi = std::max(std::max(cc, channel(n, shift)), std::max(channel(s, shift), std::max(channel(wst, shift), channel(e, shift))));
+                sharpened = std::clamp(sharpened, lo, hi);
+
                 out |= clampByte(sharpened) << shift;
             }
             out |= c & 0xFF000000; // alpha passed through unchanged
@@ -920,8 +932,17 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
         u32 sharpened = 0;
         for (int i = 0; i < 3; i++)
         {
+            int shift = i * 8;
             int v = cc[i] + ((int)(cc[i] - avgv[i]) * strQ12 >> 12);
-            sharpened |= clampByte(v) << (i * 8);
+            // Anti-ringing clamp - see TextureSharpen's copy of this
+            // same comment above. avgv[i] is already (n+s+w+e)/4 for
+            // this channel, but the clamp needs the actual min/max
+            // across the individual neighbours (not their average), so
+            // it's recomputed here from cc/n/s/wst/e directly.
+            int lo = std::min(cc[i], std::min(channel(n, shift), std::min(channel(s, shift), std::min(channel(wst, shift), channel(e, shift)))));
+            int hi = std::max(cc[i], std::max(channel(n, shift), std::max(channel(s, shift), std::max(channel(wst, shift), channel(e, shift)))));
+            v = std::clamp(v, lo, hi);
+            sharpened |= clampByte(v) << shift;
         }
         sharpened |= c & 0xFF000000;
 

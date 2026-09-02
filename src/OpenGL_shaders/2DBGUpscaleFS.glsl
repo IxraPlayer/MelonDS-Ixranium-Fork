@@ -144,7 +144,22 @@ void main()
     float edgeFactor = smoothstep(4.0, 28.0, edgeMag);
     float effStrength = kSharpenStrength * (0.33 + edgeFactor * (1.5 - 0.33));
 
-    vec3 sharpened = clamp(centre.rgb + diff * effStrength, 0.0, 1.0);
+    vec3 sharpened = centre.rgb + diff * effStrength;
+
+    // Anti-ringing clamp: a hard, high-contrast edge (e.g. the thick
+    // black outlines this game's character art and UI text are drawn
+    // with) is exactly where edgeFactor - and so effStrength - is
+    // largest, which is also exactly where an unsharp mask overshoots
+    // the most: the boosted pixel ends up brighter/darker than every
+    // real colour in its own neighbourhood, seen as a thin fringe
+    // hugging the outline (independent of the alpha-boundary fix
+    // above, which only handles the transparency case). Standard fix,
+    // ~free: clamp the sharpened result to the min/max RGB actually
+    // present across centre + its 4 neighbours, so the sharpen can
+    // push contrast up to what's locally there but never past it.
+    vec3 localMin = min(min(min(centre.rgb, n.rgb), min(s.rgb, w.rgb)), e.rgb);
+    vec3 localMax = max(max(max(centre.rgb, n.rgb), max(s.rgb, w.rgb)), e.rgb);
+    sharpened = clamp(sharpened, localMin, localMax);
 
     // Saturation boost, luma-preserving - same as ApplySaturationBoost.
     float luma = dot(sharpened, vec3(0.299, 0.587, 0.114));
