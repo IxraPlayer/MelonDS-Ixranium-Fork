@@ -155,7 +155,30 @@ vec4 BG2CalcAndFetch(vec2 coord, int line)
             return texture(Capture256Tex, capcoord);
     }
 
-    return BG2Fetch(bgpos / vec2(uBGConfig[2].Size));
+    // Rotscale BG (Type 2/3, non-capture): the hardware's "Display Area
+    // Overflow" bit picks one of two behaviours once bgpos rotates past
+    // the layer's own bounds - wrap back around (Clamp==false) or go
+    // fully transparent out there (Clamp==true). Falling straight
+    // through to texture(BGLayerTex[2], coord) below does NEITHER: the
+    // sampler's own GL_CLAMP_TO_EDGE wrap mode (set at texture creation)
+    // takes over instead, which just smears/repeats whatever row or
+    // column sits on that edge - looking like a stretched, wrong-facing
+    // strip of content, with the OPPOSITE edge (never sampled through
+    // this path) never showing up where wraparound should have put it.
+    // A spinning affine layer (e.g. a rotating medal/wheel BG) sweeps
+    // past its own edge constantly, so this is exactly where it shows.
+    vec2 bg2coord = bgpos / vec2(uBGConfig[2].Size);
+    if (uBGConfig[2].Clamp)
+    {
+        if (any(lessThan(bg2coord, vec2(0))) || any(greaterThanEqual(bg2coord, vec2(1))))
+            return vec4(0);
+    }
+    else
+    {
+        bg2coord = fract(bg2coord);
+    }
+
+    return BG2Fetch(bg2coord);
 }
 
 vec4 BG3CalcAndFetch(vec2 coord, int line)
@@ -201,7 +224,19 @@ vec4 BG3CalcAndFetch(vec2 coord, int line)
             return texture(Capture256Tex, capcoord);
     }
 
-    return BG3Fetch(bgpos / vec2(uBGConfig[3].Size));
+    // See BG2CalcAndFetch above - same missing overflow handling.
+    vec2 bg3coord = bgpos / vec2(uBGConfig[3].Size);
+    if (uBGConfig[3].Clamp)
+    {
+        if (any(lessThan(bg3coord, vec2(0))) || any(greaterThanEqual(bg3coord, vec2(1))))
+            return vec4(0);
+    }
+    else
+    {
+        bg3coord = fract(bg3coord);
+    }
+
+    return BG3Fetch(bg3coord);
 }
 
 void CalcSpriteMosaic(in ivec2 coord, out ivec4 objflags, out vec4 objcolor)
