@@ -118,6 +118,25 @@ void main()
     vec4 s = GetUpscaled(outPx + ivec2(0, 1));
     vec4 w = GetUpscaled(outPx + ivec2(-1, 0));
     vec4 e = GetUpscaled(outPx + ivec2(1, 0));
+
+    // A neighbour on the far side of a transparency boundary (a
+    // sprite's silhouette edge, or the unused/cleared part of its
+    // atlas cell) has whatever RGB happened to be written there
+    // alongside alpha=0 - that colour is meaningless (never actually
+    // drawn) but still gets counted as a real neighbour by the diff
+    // below, registering as a huge false edge right at the sprite's
+    // outline. The unsharp mask then overshoots there, which shows up
+    // as colour fringing (often black or green, since R/G/B overshoot
+    // by different amounts) hugging moving sprites - worse the higher
+    // the tier weights/sharpen strength are pushed. Fix: a neighbour
+    // whose alpha doesn't match centre's isn't a real colour edge for
+    // this purpose, so fall back to centre's own colour for it instead
+    // of letting its arbitrary RGB feed the diff.
+    if (abs(n.a - centre.a) > kColorTol) n.rgb = centre.rgb;
+    if (abs(s.a - centre.a) > kColorTol) s.rgb = centre.rgb;
+    if (abs(w.a - centre.a) > kColorTol) w.rgb = centre.rgb;
+    if (abs(e.a - centre.a) > kColorTol) e.rgb = centre.rgb;
+
     vec4 avg = (n + s + w + e) * 0.25;
 
     vec3 diff = centre.rgb - avg.rgb;
