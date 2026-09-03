@@ -200,5 +200,5 @@ void main()
     float luma = lumaSharpened;
     vec3 saturated = clamp(luma + (sharpened - luma) * kSaturationBoost, 0.0, 1.0);
 
-    oColor = vec4(saturated, centre.a);
+    oColor = vec4(1.0, 1.0, 0.0, centre.a); // DIAGNOSTIC: force yellow, remove after test
 }
