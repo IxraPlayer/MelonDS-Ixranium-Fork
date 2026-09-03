@@ -122,7 +122,8 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     else if (qr == 1 && qc == 0) { isActive = condBL; neighbor = D; }
     else                          { isActive = condBR; neighbor = F; }
 
-    return isActive ? mix(E, neighbor, TierWeight(dist)) : E;
+    return E; // DIAGNOSTIC: bypass corner-blend entirely, remove after test
+    // return isActive ? mix(E, neighbor, TierWeight(dist)) : E;
 }
 
 // Looks up the upscaled colour at an arbitrary point in OUTPUT (4x)
