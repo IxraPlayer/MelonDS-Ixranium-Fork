@@ -47,9 +47,9 @@ const float kChannelMax = 63.0;
 const float kColorTol = 3.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
-const float kTier0 = 1.00;
-const float kTier1 = 0.70;
-const float kTier2 = 0.35;
+const float kTier0 = 0.55;
+const float kTier1 = 0.40;
+const float kTier2 = 0.20;
 
 vec4 Fetch(ivec2 p)
 {
@@ -59,12 +59,7 @@ vec4 Fetch(ivec2 p)
 
 bool Close(vec4 a, vec4 b)
 {
-    // See 2DBGUpscaleFS.glsl's copy of this comment: luma, not raw
-    // per-channel RGB, to match the now-luma-only corner blend and
-    // resist false-firing on per-pixel dithering/shading noise.
-    float lumaA = dot(a.rgb, vec3(0.299, 0.587, 0.114));
-    float lumaB = dot(b.rgb, vec3(0.299, 0.587, 0.114));
-    return abs(lumaA - lumaB) <= kColorTol && abs(a.a - b.a) <= kColorTol;
+    return all(lessThanEqual(abs(a - b), vec4(kColorTol)));
 }
 
 float TierWeight(int dist)

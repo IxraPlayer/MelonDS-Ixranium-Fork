@@ -47,9 +47,9 @@ out vec4 oColor;
 const float kColorTol = 12.0 / 255.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
-const float kTier0 = 1.00;
-const float kTier1 = 0.97;
-const float kTier2 = 0.85;
+const float kTier0 = 0.55;
+const float kTier1 = 0.45;
+const float kTier2 = 0.30;
 
 // Mirrors kSharpenStrength / the 4.0-28.0 edge-magnitude range / the
 // 0.33-1.5 strength-multiplier range in TextureSharpen (GPU3D_Texcache.h).
@@ -66,21 +66,7 @@ vec4 Fetch(ivec2 p, ivec2 cellMin, ivec2 cellMax)
 
 bool Close(vec4 a, vec4 b)
 {
-    // Luma, not raw per-channel RGB - the corner-detection this feeds
-    // is meant to find real shape corners (a genuine brightness/shape
-    // discontinuity), and the blend it drives (UpscaledColorAt below)
-    // only ever moves luma now too. Comparing raw RGB here made this
-    // trigger on ordinary per-pixel dithering/shading noise, where two
-    // adjacent palette entries can have quite different individual
-    // channel values while still being close in perceived brightness -
-    // exactly the false corner-fires that were causing a fringe (colour
-    // fringing before UpscaledColorAt's luma-only fix, brightness
-    // fringing still after it) to hug otherwise-clean high-contrast
-    // edges. Alpha is kept as its own strict check since it's a real,
-    // separate signal (a transparency boundary), not colour/shading.
-    float lumaA = dot(a.rgb, vec3(0.299, 0.587, 0.114));
-    float lumaB = dot(b.rgb, vec3(0.299, 0.587, 0.114));
-    return abs(lumaA - lumaB) <= kColorTol && abs(a.a - b.a) <= kColorTol;
+    return all(lessThanEqual(abs(a - b), vec4(kColorTol)));
 }
 
 float TierWeight(int dist)
