@@ -96,6 +96,21 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
     return true;
 }
 
+// Luma (+ alpha) version of ColorsClose, for EagleUpscale4x's corner
+// detection specifically - matches that function's corner blend
+// (BlendColorsLumaOnly) now only ever moving luma, and resists
+// false-firing on per-pixel dithering/shading noise where individual
+// RGB channels can differ more than perceived brightness does. Alpha
+// is still checked per-channel since it's a real, separate signal (a
+// transparency boundary), not colour/shading.
+inline bool ColorsCloseLuma(u32 a, u32 b, u32 tolerance)
+{
+    auto ch = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    int lumaA = (76*ch(a,0) + 150*ch(a,8) + 29*ch(a,16)) >> 8;
+    int lumaB = (76*ch(b,0) + 150*ch(b,8) + 29*ch(b,16)) >> 8;
+    return std::abs(lumaA - lumaB) <= (int)tolerance && std::abs(ch(a,24) - ch(b,24)) <= (int)tolerance;
+}
+
 // How much channel-by-channel slack ColorsClose() allows. Compared
 // directly against DecodingBuffer's native RGB6A5 channel values (6-bit
 // RGB, 0-63 - see ConvertBitmapTexture<outputFmt_RGB6A5> etc.), NOT a
@@ -572,7 +587,7 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         if (y >= srcH) y = srcH - 1;
         return src[y * srcW + x];
     };
-    auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
+    auto Close = [](u32 a, u32 b) { return ColorsCloseLuma(a, b, kColorTolerance); };
 
     const float tiers[3] = { kTier0, kTier1, kTier2 };
 

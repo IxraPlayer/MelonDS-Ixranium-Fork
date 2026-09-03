@@ -59,7 +59,12 @@ vec4 Fetch(ivec2 p)
 
 bool Close(vec4 a, vec4 b)
 {
-    return all(lessThanEqual(abs(a - b), vec4(kColorTol)));
+    // See 2DBGUpscaleFS.glsl's copy of this comment: luma, not raw
+    // per-channel RGB, to match the now-luma-only corner blend and
+    // resist false-firing on per-pixel dithering/shading noise.
+    float lumaA = dot(a.rgb, vec3(0.299, 0.587, 0.114));
+    float lumaB = dot(b.rgb, vec3(0.299, 0.587, 0.114));
+    return abs(lumaA - lumaB) <= kColorTol && abs(a.a - b.a) <= kColorTol;
 }
 
 float TierWeight(int dist)
