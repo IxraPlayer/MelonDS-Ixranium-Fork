@@ -29,9 +29,22 @@ uniform float uSaturationBoost;
 
 out uvec4 oColor;
 
-// Mirrors kColorTolerance (=12, in 0-255 units) in GPU3D_Texcache.h -
-// see that constant's comment for why 12, not the original 2.
-const float kColorTol = 12.0;
+// SrcTex actually holds native RGB6A5 data (6-bit RGB, 0-63 per
+// channel) uploaded straight from DecodingBuffer with no rescale (see
+// GPUUpscaleSharpenSaturate's glTexSubImage2D call in
+// GPU3D_TexcacheOpenGL.cpp) - despite this file's header comment
+// claiming "0-255 integer texel values". 3DRenderFS.glsl always
+// normalizes CurTexture by dividing by (63,63,63,31), for every
+// texture regardless of which pipeline produced it, so RGB channels
+// written here must stay within 0-63 or they read back out-of-range
+// once normalized for rendering - seen as colour distortion right at
+// high-contrast edges, where the sharpen delta is largest and most
+// likely to push a channel past 63.
+const float kChannelMax = 63.0;
+
+// Mirrors kColorTolerance (=3, against the native 0-63 RGB6A5 range)
+// in GPU3D_Texcache.h - see that constant's comment for the reasoning.
+const float kColorTol = 3.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
 const float kTier0 = 1.00;
@@ -104,9 +117,10 @@ void main()
     vec4 centre = GetUpscaled(outPx);
 
     // Adaptive sharpen - same edge-magnitude-scaled unsharp mask as
-    // TextureSharpenAndSaturate in GPU3D_Texcache.h. Already in 0-255
-    // units here, so edgeMag needs no *255 the way the 2D (0-1 space)
-    // shader does.
+    // TextureSharpenAndSaturate in GPU3D_Texcache.h, but rescaled from
+    // that function's assumed 0-255 range down to this data's actual
+    // 0-63 range (4.0/28.0 * 63/255 =~ 1.0/6.9) - see kChannelMax's
+    // comment above for why 0-63, not 0-255.
     vec4 n = GetUpscaled(outPx + ivec2(0, -1));
     vec4 s = GetUpscaled(outPx + ivec2(0, 1));
     vec4 w = GetUpscaled(outPx + ivec2(-1, 0));
@@ -137,7 +151,7 @@ void main()
     float lumaDiff = lumaCentre - lumaAvg;
 
     float edgeMag = abs(lumaDiff);
-    float edgeFactor = smoothstep(4.0, 28.0, edgeMag);
+    float edgeFactor = smoothstep(4.0 * kChannelMax / 255.0, 28.0 * kChannelMax / 255.0, edgeMag);
     float effStrength = uSharpenStrength * (0.33 + edgeFactor * (1.5 - 0.33));
 
     float lumaN = dot(n.rgb, lumaWeights);
@@ -148,12 +162,12 @@ void main()
     float lumaLocalMax = max(max(max(lumaCentre, lumaN), max(lumaS, lumaW)), lumaE);
 
     float lumaSharpened = clamp(lumaCentre + lumaDiff * effStrength, lumaLocalMin, lumaLocalMax);
-    vec3 sharpened = clamp(centre.rgb + (lumaSharpened - lumaCentre), 0.0, 255.0);
+    vec3 sharpened = clamp(centre.rgb + (lumaSharpened - lumaCentre), 0.0, kChannelMax);
 
     // Saturation boost, luma-preserving - same as
     // TextureSharpenAndSaturate's saturation step.
     float luma = lumaSharpened;
-    vec3 saturated = clamp(luma + (sharpened - luma) * uSaturationBoost, 0.0, 255.0);
+    vec3 saturated = clamp(luma + (sharpened - luma) * uSaturationBoost, 0.0, kChannelMax);
 
     oColor = uvec4(uvec3(round(saturated)), uint(centre.a));
 }

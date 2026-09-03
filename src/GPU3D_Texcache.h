@@ -96,11 +96,13 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
     return true;
 }
 
-// How much channel-by-channel slack ColorsClose() allows, in the same
-// 0-255 units the packed texel channels are stored in. Used to decide
-// whether two neighbouring pixels are "the same" for the corner-
-// detection logic below (EagleUpscale4x/GPUUpscaleSharpenSaturate) -
-// NOT a general smoothing/blur amount. Was kept very tiny (2) on the
+// How much channel-by-channel slack ColorsClose() allows. Compared
+// directly against DecodingBuffer's native RGB6A5 channel values (6-bit
+// RGB, 0-63 - see ConvertBitmapTexture<outputFmt_RGB6A5> etc.), NOT a
+// 0-255 byte range despite channels being stored one-per-byte. Used to
+// decide whether two neighbouring pixels are "the same" for the
+// corner-detection logic below (EagleUpscale4x/GPUUpscaleSharpenSaturate)
+// - NOT a general smoothing/blur amount. Was kept very tiny (2) on the
 // assumption that anything bigger would blend two genuinely different
 // palette entries placed next to each other for dithering - but that
 // same tightness means a dithering pixel and its neighbour are always
@@ -110,12 +112,13 @@ inline bool ColorsClose(u32 a, u32 b, u32 tolerance)
 // replicates whatever colour the dither pixel happens to be (e.g. a
 // fine-shading colour that reads as blended only at native pixel
 // density) across a whole 2x2 output block - a speckled colour fringe
-// hugging otherwise-clean high-contrast edges. 12 is loose enough to
-// treat adjacent dithering steps as "the same" (defusing the false
+// hugging otherwise-clean high-contrast edges. 3 (proportionally the
+// same looseness as 12 would be against a 0-255 range) is loose enough
+// to treat adjacent dithering steps as "the same" (defusing the false
 // corner triggers) while staying well under the gap between two
 // visually distinct palette entries, so real shape corners still
 // upscale the same as before.
-inline constexpr u32 kColorTolerance = 12;
+inline constexpr u32 kColorTolerance = 3;
 
 // Persistent worker-thread pool for the row-parallel upscale/sharpen
 // work below. Deliberately NOT spawning std::thread objects per call:
@@ -777,7 +780,10 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
     };
 
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
-    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
+    // See TextureSharpenAndSaturate's copy of this comment: DecodingBuffer
+    // is native RGB6A5 (0-63 per RGB channel), and 3DRenderFS.glsl always
+    // divides by 63 - clampByte must match that, not the full byte range.
+    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 63); };
     auto smoothstepf = [](float lo, float hi, float x) -> float
     {
         float t = std::clamp((x - lo) / (hi - lo), 0.0f, 1.0f);
@@ -847,7 +853,9 @@ inline void TextureSharpen(const u32* src, u32 w, u32 h, u32* dst, float strengt
 inline void ApplySaturationBoost(u32* buf, u32 w, u32 h, float factor)
 {
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
-    auto clampByte = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 255); };
+    // Native RGB6A5 range (0-63) - see TextureSharpenAndSaturate's copy
+    // of this comment.
+    auto clampByte = [](float v) -> u32 { return (u32)std::clamp((int)(v + 0.5f), 0, 63); };
 
     for (u32 i = 0; i < w * h; i++)
     {
@@ -877,7 +885,14 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
                                        float sharpenStrength, float satFactor)
 {
     auto channel = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
-    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 255); };
+    // DecodingBuffer (this function's input) is native RGB6A5: 6-bit
+    // RGB (0-63), packed one per byte. clampByte must match that
+    // range, not the full 0-255 a byte can hold - 3DRenderFS.glsl
+    // always divides CurTexture by (63,63,63,31), so any RGB channel
+    // pushed above 63 here reads back out-of-range once normalized
+    // for rendering (seen as colour distortion right at the
+    // high-contrast edges where the sharpen delta is largest).
+    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 63); };
     const float invRange = 1.0f / (28.0f - 4.0f);
     auto smoothstepf = [invRange](float lo, float x) -> float
     {
