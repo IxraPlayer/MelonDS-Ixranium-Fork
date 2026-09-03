@@ -53,7 +53,7 @@ const float kTier2 = 0.85;
 
 // Mirrors kSharpenStrength / the 4.0-28.0 edge-magnitude range / the
 // 0.33-1.5 strength-multiplier range in TextureSharpen (GPU3D_Texcache.h).
-const float kSharpenStrength = 0.2;
+const float kSharpenStrength = 0.0; // DIAGNOSTIC: temporarily 0 (was 0.2) to isolate the green-fringe cause in the CORRECT (2D) pipeline - restore to 0.2 afterwards
 
 // Mirrors kSaturationBoost in GPU3D_Texcache.h.
 const float kSaturationBoost = 1.05;
@@ -200,5 +200,5 @@ void main()
     float luma = lumaSharpened;
     vec3 saturated = clamp(luma + (sharpened - luma) * kSaturationBoost, 0.0, 1.0);
 
-    oColor = vec4(1.0, 1.0, 0.0, centre.a); // DIAGNOSTIC: force yellow, remove after test
+    oColor = vec4(saturated, centre.a);
 }

@@ -995,7 +995,12 @@ inline void TextureSharpenAndSaturate(const u32* src, u32 w, u32 h, u32* dst,
             sharpened |= clampByte(cc[i] + delta) << (i * 8);
         sharpened |= c & 0xFF000000;
 
-        return 0u | (63u << 8) | (63u << 16) | (sharpened & 0xFF000000); // DIAGNOSTIC: force cyan, remove after test
+        int r = channel(sharpened, 0), g = channel(sharpened, 8), b = channel(sharpened, 16);
+        int satLuma = lumaSharpened;
+        return clampByte(satLuma + ((r - satLuma) * satFactorQ12 >> 12))
+             | (clampByte(satLuma + ((g - satLuma) * satFactorQ12 >> 12)) << 8)
+             | (clampByte(satLuma + ((b - satLuma) * satFactorQ12 >> 12)) << 16)
+             | (sharpened & 0xFF000000);
     };
 
     ParallelForRows(h, [&](u32 yStart, u32 yEnd)

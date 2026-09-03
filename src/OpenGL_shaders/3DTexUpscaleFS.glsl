@@ -169,5 +169,5 @@ void main()
     float luma = lumaSharpened;
     vec3 saturated = clamp(luma + (sharpened - luma) * uSaturationBoost, 0.0, kChannelMax);
 
-    oColor = uvec4(uvec3(63, 0, 63), uint(centre.a)); // DIAGNOSTIC: force magenta, remove after test
+    oColor = uvec4(uvec3(round(saturated)), uint(centre.a));
 }
