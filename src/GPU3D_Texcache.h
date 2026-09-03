@@ -1359,11 +1359,27 @@ public:
 
         if (upscaleOn)
         {
+            // width/height must be part of the key: TextureHash/TexPalHash
+            // only hash the raw VRAM bytes a texture decodes from, so two
+            // textures declared at different dimensions but sharing the
+            // same VRAM address and byte count (e.g. 64x64 vs 128x32 -
+            // same texel count, different shape) would otherwise produce
+            // an identical contentKey and silently serve each other's
+            // cached upscaled buffer - a differently-shaped image's data
+            // reinterpreted as this texture's, seen as another texture's
+            // content bleeding into this one.
             contentKey = entry.TextureHash[0] ^ (entry.TextureHash[1] * 0x9E3779B97F4A7C15ULL)
-                       ^ (entry.TexPalHash * 0xC2B2AE3D27D4EB4FULL) ^ ((u64)fmt << 56);
+                       ^ (entry.TexPalHash * 0xC2B2AE3D27D4EB4FULL) ^ ((u64)fmt << 56)
+                       ^ ((u64)width << 20) ^ ((u64)height << 32);
 
             auto cit = UpscaleResultCache.find(contentKey);
-            if (cit != UpscaleResultCache.end())
+            // Defensive size check: even with width/height now folded into
+            // the key, re-validate the cached buffer is actually the size
+            // this query needs before trusting it - a hash collision
+            // (however unlikely) or any future key change should fail
+            // safe (fall through to a real decode) rather than upload a
+            // wrong-shaped buffer.
+            if (cit != UpscaleResultCache.end() && cit->second.size() == (size_t)(width * 4) * (height * 4))
             {
                 uploadW = width * 4;
                 uploadH = height * 4;
