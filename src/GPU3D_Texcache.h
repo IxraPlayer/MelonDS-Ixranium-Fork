@@ -500,6 +500,26 @@ inline u32 BlendColors(u32 a, u32 b, float t)
     return ch(0) | ch(8) | ch(16) | ch(24);
 }
 
+// Luma-only blend for Eagle4x's corner-detection quadrant fill below -
+// mixes brightness toward the neighbour but keeps `a`'s (centre's) own
+// chroma, so a corner condition that false-fires on ordinary per-pixel
+// dithering/shading noise (rather than a genuine shape corner) can
+// never introduce a completely different hue into the block - only
+// change its brightness. Native RGB6A5 range (0-63), matching
+// DecodingBuffer/TextureSharpenAndSaturate's range, not BlendColors'
+// full 0-255.
+inline u32 BlendColorsLumaOnly(u32 a, u32 b, float t)
+{
+    auto ch = [](u32 c, int shift) -> int { return (int)((c >> shift) & 0xFF); };
+    int ar = ch(a, 0), ag = ch(a, 8), ab = ch(a, 16);
+    int br = ch(b, 0), bg = ch(b, 8), bb = ch(b, 16);
+    float lumaA = 0.299f*ar + 0.587f*ag + 0.114f*ab;
+    float lumaB = 0.299f*br + 0.587f*bg + 0.114f*bb;
+    int delta = (int)std::lround((lumaB - lumaA) * t);
+    auto clampByte = [](int v) -> u32 { return (u32)std::clamp(v, 0, 63); };
+    return clampByte(ar + delta) | (clampByte(ag + delta) << 8) | (clampByte(ab + delta) << 16) | (a & 0xFF000000);
+}
+
 // How much of the neighbour colour EagleUpscale3x's rounded corners use
 // (see BlendColors above), where each sub-pixel would otherwise be a
 // flat 100%-neighbour copy. 1.0 = the original hard-copy behaviour (a
@@ -573,7 +593,7 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
                 if (active)
                 {
                     int dist = std::abs(lr - cornerRow) + std::abs(lc - cornerCol);
-                    out = BlendColors(centre, neighbor, tiers[dist]);
+                    out = BlendColorsLumaOnly(centre, neighbor, tiers[dist]);
                 }
                 dstBase[lr * dstW + lc] = out;
             }

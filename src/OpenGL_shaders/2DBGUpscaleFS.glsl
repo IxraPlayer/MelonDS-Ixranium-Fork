@@ -53,7 +53,7 @@ const float kTier2 = 0.85;
 
 // Mirrors kSharpenStrength / the 4.0-28.0 edge-magnitude range / the
 // 0.33-1.5 strength-multiplier range in TextureSharpen (GPU3D_Texcache.h).
-const float kSharpenStrength = 0.0; // DIAGNOSTIC: temporarily 0 (was 0.2) to isolate the green-fringe cause in the CORRECT (2D) pipeline - restore to 0.2 afterwards
+const float kSharpenStrength = 0.2;
 
 // Mirrors kSaturationBoost in GPU3D_Texcache.h.
 const float kSaturationBoost = 1.05;
@@ -122,8 +122,13 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     else if (qr == 1 && qc == 0) { isActive = condBL; neighbor = D; }
     else                          { isActive = condBR; neighbor = F; }
 
-    return E; // DIAGNOSTIC: bypass corner-blend entirely, remove after test
-    // return isActive ? mix(E, neighbor, TierWeight(dist)) : E;
+    if (!isActive) return E;
+
+    vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+    float lumaE = dot(E.rgb, lumaWeights);
+    float lumaNeighbor = dot(neighbor.rgb, lumaWeights);
+    float blendedLuma = mix(lumaE, lumaNeighbor, TierWeight(dist));
+    return vec4(E.rgb + (blendedLuma - lumaE), E.a);
 }
 
 // Looks up the upscaled colour at an arbitrary point in OUTPUT (4x)

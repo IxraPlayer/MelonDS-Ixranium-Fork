@@ -101,7 +101,13 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     else if (qr == 1 && qc == 0) { isActive = condBL; neighbor = D; }
     else                          { isActive = condBR; neighbor = F; }
 
-    return isActive ? mix(E, neighbor, TierWeight(dist)) : E;
+    if (!isActive) return E;
+
+    vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+    float lumaE = dot(E.rgb, lumaWeights);
+    float lumaNeighbor = dot(neighbor.rgb, lumaWeights);
+    float blendedLuma = mix(lumaE, lumaNeighbor, TierWeight(dist));
+    return vec4(E.rgb + (blendedLuma - lumaE), E.a);
 }
 
 vec4 GetUpscaled(ivec2 outPx)
