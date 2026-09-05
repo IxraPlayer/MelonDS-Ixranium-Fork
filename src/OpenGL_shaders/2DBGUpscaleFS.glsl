@@ -47,9 +47,24 @@ out vec4 oColor;
 const float kColorTol = 12.0 / 255.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
-const float kTier0 = 0.55;
-const float kTier1 = 0.45;
-const float kTier2 = 0.30;
+const float kTier0 = 0.75;
+const float kTier1 = 0.65;
+const float kTier2 = 0.45;
+
+// Mirrors kCornerMinDiff in GPU3D_Texcache.h (10 on the 0-63 native
+// scale -> ~10/63 here, in this shader's normalized 0-1 space). See
+// that constant's comment: gates Eagle's corner-fill so a soft AA/
+// gradient step (outlined text, shaded sprites) can't fire it on its
+// own the way a genuine hard corner can.
+const float kCornerMinDiff = 10.0 / 63.0;
+
+bool StrongDiffLuma(vec4 a, vec4 b)
+{
+    vec3 lw = vec3(0.299, 0.587, 0.114);
+    float la = dot(a.rgb, lw);
+    float lb = dot(b.rgb, lw);
+    return abs(la - lb) > kCornerMinDiff;
+}
 
 // Mirrors kSharpenStrength / the 4.0-28.0 edge-magnitude range / the
 // 0.33-1.5 strength-multiplier range in TextureSharpen (GPU3D_Texcache.h).
@@ -104,10 +119,10 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     vec4 F = Fetch(srcPx + ivec2(1, 0), cellMin, cellMax);
     vec4 H = Fetch(srcPx + ivec2(0, 1), cellMin, cellMax);
 
-    bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F);
-    bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H);
-    bool condBL = Close(D, H) && !Close(D, B) && !Close(H, F);
-    bool condBR = Close(H, F) && !Close(H, D) && !Close(F, B);
+    bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F) && StrongDiffLuma(D, H) && StrongDiffLuma(B, F);
+    bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H) && StrongDiffLuma(B, D) && StrongDiffLuma(F, H);
+    bool condBL = Close(D, H) && !Close(D, B) && !Close(H, F) && StrongDiffLuma(D, B) && StrongDiffLuma(H, F);
+    bool condBR = Close(H, F) && !Close(H, D) && !Close(F, B) && StrongDiffLuma(H, D) && StrongDiffLuma(F, B);
 
     int qr = local.y / 2; // which quadrant: 0 = top, 1 = bottom
     int qc = local.x / 2; // which quadrant: 0 = left, 1 = right

@@ -135,6 +135,31 @@ inline bool ColorsCloseLuma(u32 a, u32 b, u32 tolerance)
 // upscale the same as before.
 inline constexpr u32 kColorTolerance = 3;
 
+// Minimum LUMA difference (native 0-63 RGB6A5 range) a "not-close" pair
+// must actually have before Eagle's corner-fill is allowed to fire.
+// kColorTolerance alone only says "not identical, more than a few units
+// apart" - a smoothly-shaded region (anti-aliased outline text, soft
+// gradient shading) steps through many genuinely-different luma values
+// only a handful of units apart each, which clears kColorTolerance
+// easily but is nothing like a real "corner" (two flat regions meeting
+// at an angle, e.g. thick black outline against a solid fill). Without
+// this extra gate, EVERY one of those small AA/gradient steps can
+// satisfy the corner condition on its own, each one replicating its own
+// (slightly-off) colour across a 2x2 output block - visible as a fringe
+// of tiny mismatched dots hugging outlined/anti-aliased edges
+// specifically (flat-colour pixel art has no such steps, so it doesn't
+// show this). Requiring the "different" pair to diverge by a real
+// margin - clearly above a soft-shading step, clearly below the gap
+// between two intentionally distinct palette entries (~20+ here) -
+// keeps genuine hard-edged corners upscaling exactly as before while
+// no longer false-firing on every small shading step along a soft edge.
+inline constexpr u32 kCornerMinDiff = 10;
+
+inline bool StrongLumaDiff(u32 a, u32 b)
+{
+    return !ColorsCloseLuma(a, b, kCornerMinDiff);
+}
+
 // Persistent worker-thread pool for the row-parallel upscale/sharpen
 // work below. Deliberately NOT spawning std::thread objects per call:
 // this function runs once per cache-miss texture, and a scene with a
@@ -573,9 +598,15 @@ inline constexpr float kEdgeBlend = 0.45f;
 // the four 2x2... rather 2-cell-deep quadrants is entirely independent,
 // driven only by its own corner condition, so there's no shared/OR'd
 // condition to reconcile the way EagleUpscale3x's edge cells needed.
-inline constexpr float kTier0 = 0.55f; // the actual corner cell (was 1.00 - full misfire pop softened)
-inline constexpr float kTier1 = 0.45f; // one step away (two cells) (was 0.97)
-inline constexpr float kTier2 = 0.30f; // two steps away (one cell, deepest into the quadrant) (was 0.85)
+// Raised back up from the old 0.55/0.45/0.30 now that kCornerMinDiff
+// (above) gates out the soft-gradient false-fires that the old, softer
+// tiers were compensating for - genuine corners can afford to blend
+// stronger again without reintroducing the speckle those false-fires
+// caused. Still short of the original 1.00/0.97/0.85 as a safety
+// margin against any misfire that slips through the new gate.
+inline constexpr float kTier0 = 0.75f; // the actual corner cell (was 1.00, then softened to 0.55)
+inline constexpr float kTier1 = 0.65f; // one step away (two cells) (was 0.97, then softened to 0.45)
+inline constexpr float kTier2 = 0.45f; // two steps away (one cell, deepest into the quadrant) (was 0.85, then softened to 0.30)
 
 inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
 {
@@ -625,10 +656,10 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
                 u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
                 u32 H = at(x, y+1);
 
-                bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F);
-                bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H);
-                bool condBL = Close(D,H) && !Close(D,B) && !Close(H,F);
-                bool condBR = Close(H,F) && !Close(H,D) && !Close(F,B);
+                bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F) && StrongLumaDiff(D,H) && StrongLumaDiff(B,F);
+                bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H) && StrongLumaDiff(B,D) && StrongLumaDiff(F,H);
+                bool condBL = Close(D,H) && !Close(D,B) && !Close(H,F) && StrongLumaDiff(D,B) && StrongLumaDiff(H,F);
+                bool condBR = Close(H,F) && !Close(H,D) && !Close(F,B) && StrongLumaDiff(H,D) && StrongLumaDiff(F,B);
 
                 u32* block = dst + (y*4) * dstW + (x*4);
                 fillQuadrant(block,                    condTL, D, E, 0, 0); // top-left quadrant, corner at its own (0,0)

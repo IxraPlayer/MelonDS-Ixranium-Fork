@@ -47,9 +47,24 @@ const float kChannelMax = 63.0;
 const float kColorTol = 3.0;
 
 // Mirrors kTier0/kTier1/kTier2 in GPU3D_Texcache.h.
-const float kTier0 = 0.55;
-const float kTier1 = 0.40;
-const float kTier2 = 0.20;
+const float kTier0 = 0.75;
+const float kTier1 = 0.55;
+const float kTier2 = 0.35;
+
+// Mirrors kCornerMinDiff in GPU3D_Texcache.h - same 0-63 native scale
+// as this shader's texels, so used directly with no unit conversion.
+// See that constant's comment: gates Eagle's corner-fill so a soft AA/
+// gradient step can't fire it on its own the way a genuine hard corner
+// (two flat regions meeting at an angle) can.
+const float kCornerMinDiff = 10.0;
+
+bool StrongDiffLuma(vec4 a, vec4 b)
+{
+    vec3 lw = vec3(0.299, 0.587, 0.114);
+    float la = dot(a.rgb, lw);
+    float lb = dot(b.rgb, lw);
+    return abs(la - lb) > kCornerMinDiff;
+}
 
 vec4 Fetch(ivec2 p)
 {
@@ -83,10 +98,10 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
     vec4 F = Fetch(srcPx + ivec2(1, 0));
     vec4 H = Fetch(srcPx + ivec2(0, 1));
 
-    bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F);
-    bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H);
-    bool condBL = Close(D, H) && !Close(D, B) && !Close(H, F);
-    bool condBR = Close(H, F) && !Close(H, D) && !Close(F, B);
+    bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F) && StrongDiffLuma(D, H) && StrongDiffLuma(B, F);
+    bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H) && StrongDiffLuma(B, D) && StrongDiffLuma(F, H);
+    bool condBL = Close(D, H) && !Close(D, B) && !Close(H, F) && StrongDiffLuma(D, B) && StrongDiffLuma(H, F);
+    bool condBR = Close(H, F) && !Close(H, D) && !Close(F, B) && StrongDiffLuma(H, D) && StrongDiffLuma(F, B);
 
     int qr = local.y / 2;
     int qc = local.x / 2;
