@@ -77,6 +77,23 @@ bool Close(vec4 a, vec4 b)
     return all(lessThanEqual(abs(a - b), vec4(kColorTol)));
 }
 
+// Mirrors the `denoise` lambda in EagleUpscale4x (GPU3D_Texcache.h) -
+// see that comment. Flattens a lone dither speck back to its
+// surroundings before Eagle's corner logic sees it.
+vec4 Denoise(ivec2 p)
+{
+    vec4 c = Fetch(p);
+    vec4 n = Fetch(p + ivec2(0,-1));
+    vec4 s = Fetch(p + ivec2(0, 1));
+    vec4 w = Fetch(p + ivec2(-1,0));
+    vec4 e = Fetch(p + ivec2( 1,0));
+    if (Close(c,n) || Close(c,s) || Close(c,w) || Close(c,e))
+        return c;
+    if (!Close(n,s) || !Close(n,w) || !Close(n,e))
+        return c;
+    return n;
+}
+
 float TierWeight(int dist)
 {
     if (dist == 0) return kTier0;
@@ -92,11 +109,11 @@ float TierWeight(int dist)
 // function for arbitrary output-space positions.
 vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
 {
-    vec4 B = Fetch(srcPx + ivec2(0, -1));
-    vec4 D = Fetch(srcPx + ivec2(-1, 0));
-    vec4 E = Fetch(srcPx);
-    vec4 F = Fetch(srcPx + ivec2(1, 0));
-    vec4 H = Fetch(srcPx + ivec2(0, 1));
+    vec4 B = Denoise(srcPx + ivec2(0, -1));
+    vec4 D = Denoise(srcPx + ivec2(-1, 0));
+    vec4 E = Denoise(srcPx);
+    vec4 F = Denoise(srcPx + ivec2(1, 0));
+    vec4 H = Denoise(srcPx + ivec2(0, 1));
 
     bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F) && StrongDiffLuma(D, H) && StrongDiffLuma(B, F);
     bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H) && StrongDiffLuma(B, D) && StrongDiffLuma(F, H);

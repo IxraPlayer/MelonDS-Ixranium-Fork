@@ -620,6 +620,31 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
     };
     auto Close = [](u32 a, u32 b) { return ColorsClose(a, b, kColorTolerance); };
 
+    // De-dithering pre-filter: many DS titles fake extra shading steps
+    // by stippling between two/three genuinely distinct palette entries
+    // (real colours, not a blend) instead of true alpha blending.
+    // That's an intentionally big colour gap, so it isn't a false
+    // corner-fire and StrongLumaDiff/kCornerMinDiff above doesn't (and
+    // shouldn't) touch it - Eagle just enlarges those dither pixels
+    // along with everything else, and at 4x "invisible texture grain"
+    // becomes a visible fringe of dots around outlined/shaded areas.
+    // This runs first and flattens exactly that case: a pixel that
+    // disagrees with all four direct neighbours, while those four
+    // neighbours mutually agree with each other (a lone speck in an
+    // otherwise flat run, not a genuine 1px-wide detail flanked by more
+    // of its own colour along its length), gets replaced by that
+    // surrounding colour before Eagle ever sees it.
+    auto denoise = [&](u32 x, u32 y) -> u32
+    {
+        u32 c = at(x, y);
+        u32 n = at(x, y-1), s = at(x, y+1), w = at(x-1, y), e = at(x+1, y);
+        if (Close(c,n) || Close(c,s) || Close(c,w) || Close(c,e))
+            return c; // agrees with at least one neighbour - not an isolated speck
+        if (!Close(n,s) || !Close(n,w) || !Close(n,e))
+            return c; // neighbours don't mutually agree either - not a flat run
+        return n; // isolated speck sitting in an otherwise flat area
+    };
+
     const float tiers[3] = { kTier0, kTier1, kTier2 };
 
     // Fills one 2x2 quadrant of the 4x4 output block. (cellRow, cellCol)
@@ -652,9 +677,9 @@ inline void EagleUpscale4x(const u32* src, u32 srcW, u32 srcH, u32* dst)
         {
             for (u32 x = 0; x < srcW; x++)
             {
-                u32 B = at(x, y-1);
-                u32 D = at(x-1, y),   E = at(x, y),   F = at(x+1, y);
-                u32 H = at(x, y+1);
+                u32 B = denoise(x, y-1);
+                u32 D = denoise(x-1, y),   E = denoise(x, y),   F = denoise(x+1, y);
+                u32 H = denoise(x, y+1);
 
                 bool condTL = Close(D,B) && !Close(D,H) && !Close(B,F) && StrongLumaDiff(D,H) && StrongLumaDiff(B,F);
                 bool condTR = Close(B,F) && !Close(B,D) && !Close(F,H) && StrongLumaDiff(B,D) && StrongLumaDiff(F,H);

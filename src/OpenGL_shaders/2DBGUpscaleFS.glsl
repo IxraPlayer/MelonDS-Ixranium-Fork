@@ -84,6 +84,26 @@ bool Close(vec4 a, vec4 b)
     return all(lessThanEqual(abs(a - b), vec4(kColorTol)));
 }
 
+// Mirrors the `denoise` lambda in EagleUpscale4x (GPU3D_Texcache.h) -
+// see that comment. Flattens a lone dither speck (disagrees with all 4
+// direct neighbours, while those 4 mutually agree with each other) back
+// to its surroundings before Eagle's corner logic ever sees it, so
+// intentional DS-style stipple shading doesn't show up as a fringe of
+// visible dots once blown up 4x.
+vec4 Denoise(ivec2 p, ivec2 cellMin, ivec2 cellMax)
+{
+    vec4 c = Fetch(p, cellMin, cellMax);
+    vec4 n = Fetch(p + ivec2(0,-1), cellMin, cellMax);
+    vec4 s = Fetch(p + ivec2(0, 1), cellMin, cellMax);
+    vec4 w = Fetch(p + ivec2(-1,0), cellMin, cellMax);
+    vec4 e = Fetch(p + ivec2( 1,0), cellMin, cellMax);
+    if (Close(c,n) || Close(c,s) || Close(c,w) || Close(c,e))
+        return c;
+    if (!Close(n,s) || !Close(n,w) || !Close(n,e))
+        return c;
+    return n;
+}
+
 float TierWeight(int dist)
 {
     if (dist == 0) return kTier0;
@@ -113,11 +133,11 @@ vec4 UpscaledColorAt(ivec2 srcPx, ivec2 local)
         cellMax = min(cellMin + uCellSize - ivec2(1), uSrcSize - ivec2(1));
     }
 
-    vec4 B = Fetch(srcPx + ivec2(0, -1), cellMin, cellMax);
-    vec4 D = Fetch(srcPx + ivec2(-1, 0), cellMin, cellMax);
-    vec4 E = Fetch(srcPx, cellMin, cellMax);
-    vec4 F = Fetch(srcPx + ivec2(1, 0), cellMin, cellMax);
-    vec4 H = Fetch(srcPx + ivec2(0, 1), cellMin, cellMax);
+    vec4 B = Denoise(srcPx + ivec2(0, -1), cellMin, cellMax);
+    vec4 D = Denoise(srcPx + ivec2(-1, 0), cellMin, cellMax);
+    vec4 E = Denoise(srcPx, cellMin, cellMax);
+    vec4 F = Denoise(srcPx + ivec2(1, 0), cellMin, cellMax);
+    vec4 H = Denoise(srcPx + ivec2(0, 1), cellMin, cellMax);
 
     bool condTL = Close(D, B) && !Close(D, H) && !Close(B, F) && StrongDiffLuma(D, H) && StrongDiffLuma(B, F);
     bool condTR = Close(B, F) && !Close(B, D) && !Close(F, H) && StrongDiffLuma(B, D) && StrongDiffLuma(F, H);
